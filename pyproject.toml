@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quasimorph-ritual-optimizer"
+version = "0.3.0"
+description = "Desktop brute-force optimizer for Quasimorph pact rituals"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "Bruno Hasselaar"}]
+keywords = ["quasimorph", "optimizer", "ritual", "gaming", "tkinter"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = []
+
+[project.gui-scripts]
+quasimorph-ritual-optimizer = "quasimorph_optimizer.app:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+quasimorph_optimizer = ["data/*.csv"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]

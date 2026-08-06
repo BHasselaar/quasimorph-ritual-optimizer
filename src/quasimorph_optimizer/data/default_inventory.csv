@@ -1,0 +1,19 @@
+enabled,name,essence,power,stability
+true,Load of Gold Bars,eon,110,25
+true,Angerlings,gavvakh,110,15
+true,Fried Meat,gavvakh,65,20
+true,Rotten Meat,gavvakh,75,10
+true,Rotten Spider Flesh,agga,90,10
+true,Sang B,eon,75,20
+true,Rocket,siaira,80,10
+true,Rib,shavva,50,25
+true,Chitin,agga,60,25
+true,Acatl Parts,gavvakh,85,25
+true,Mechanism Parts,gavvakh,90,20
+true,Dog Teeth,siaira,60,25
+true,Ear,shavva,60,20
+true,Eye,eon,60,20
+true,Feces,eon,50,25
+true,Skull,shavva,65,15
+true,Spider Joint,agga,80,25
+true,Gavvakh,gavvakh,100,25
