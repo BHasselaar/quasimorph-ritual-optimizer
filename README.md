@@ -2,23 +2,6 @@
 
 A Windows desktop application that exhaustively searches five-component pact rituals in **Quasimorph** and ranks clockwise ring orders for Jackpot, Upgrade, Sidegrade, low Disenchant risk, or balanced Power/Stability.
 
-## What changed in v0.3.0
-
-Version 0.3.0 removes the provisional empirical calibration introduced in v0.2.0. The Tier 3 Siaira discrepancy was caused by an incorrect inventory entry: **Spider Joint is Agga, not Shavva**.
-
-With Spider Joint corrected and the installed **+100 ship Power** bonus applied, the community model reproduces the game display for:
-
-```text
-Load of Gold Bars → Gavvakh → Spider Joint → Rotten Spider Flesh → Feces
-```
-
-```text
-Calculated exact: Upgrade 44.505%, Sidegrade 2.683%, Downgrade 41.495%, Disenchant 11.317%
-Game display:     Upgrade 45%,     Sidegrade 3%,     Downgrade 41%,     Disenchant 11%
-```
-
-Four additional Tier 1 Gavvakh tests also match the game's rounded percentages. These tests verify that ship bonuses are added **after affinity-adjusted component contributions are summed** and before division by the tier targets.
-
 ## Features
 
 - Exact brute-force search over every five-item selection and directed circular order.
