@@ -50,8 +50,6 @@ true,Load of Gold Bars,eon,110,25
 true,Spider Joint,agga,80,25
 ```
 
-On first launch after upgrading from v0.1/v0.2, the app automatically corrects the exact known legacy entry `Spider Joint,shavva,80,25` to Agga. Other custom items are not changed.
-
 ## Calculation model
 
 For each component:
