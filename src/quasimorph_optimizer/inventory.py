@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import csv
-import os
 from importlib import resources
 from pathlib import Path
 
 from .models import Item
+from .settings import user_data_dir
 
 CSV_FIELDS = ("enabled", "name", "essence", "power", "stability")
 
@@ -55,39 +55,19 @@ def save_inventory(path: Path, items: list[Item]) -> None:
 
 
 def user_inventory_path() -> Path:
-    base = os.environ.get("APPDATA")
-    if base:
-        return Path(base) / "QuasimorphRitualOptimizer" / "inventory.csv"
-    return Path.home() / ".quasimorph-ritual-optimizer" / "inventory.csv"
+    return user_data_dir() / "inventory.csv"
 
 
-def migrate_inventory(items: list[Item]) -> tuple[list[Item], bool]:
-    """Correct known v0.1/v0.2 inventory data without changing user additions."""
-    migrated: list[Item] = []
-    changed = False
-    for item in items:
-        if (
-            item.name.casefold() == "spider joint"
-            and item.essence == "shavva"
-            and item.power == 80
-            and item.stability == 25
-        ):
-            migrated.append(Item(item.name, "agga", item.power, item.stability, item.enabled))
-            changed = True
-        else:
-            migrated.append(item)
-    return migrated, changed
+def reset_user_inventory_to_default() -> Path:
+    target = user_inventory_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    default_resource = resources.files("quasimorph_optimizer.data").joinpath("default_inventory.csv")
+    target.write_bytes(default_resource.read_bytes())
+    return target
 
 
 def ensure_user_inventory() -> Path:
     target = user_inventory_path()
     if not target.exists():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        default_resource = resources.files("quasimorph_optimizer.data").joinpath("default_inventory.csv")
-        target.write_bytes(default_resource.read_bytes())
-        return target
-
-    items, changed = migrate_inventory(load_inventory(target))
-    if changed:
-        save_inventory(target, items)
+        reset_user_inventory_to_default()
     return target

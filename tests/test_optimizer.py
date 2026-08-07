@@ -41,3 +41,23 @@ def test_flat_bonuses_are_added_after_component_affinities() -> None:
     boosted = evaluate_ritual(order, center_essence="siaira", tier=3, flat_power_bonus=100, flat_stability_bonus=40)
     assert isclose(boosted.total_power - base.total_power, 100.0, abs_tol=1e-12)
     assert isclose(boosted.total_stability - base.total_stability, 40.0, abs_tol=1e-12)
+
+
+def test_parallel_optimizer_matches_single_process() -> None:
+    from quasimorph_optimizer.optimizer import optimize_parallel
+
+    items = sample_items()
+    single = optimize(items, center_essence="siaira", tier=3, objective="sidegrade", top_n=7)
+    parallel = optimize_parallel(
+        items,
+        center_essence="siaira",
+        tier=3,
+        objective="sidegrade",
+        top_n=7,
+        workers=2,
+        chunk_size=1,
+    )
+    assert parallel.evaluated == single.evaluated
+    assert parallel.workers_used == 2
+    assert [r.order_text for r in parallel.results] == [r.order_text for r in single.results]
+    assert [r.probabilities.sidegrade for r in parallel.results] == [r.probabilities.sidegrade for r in single.results]

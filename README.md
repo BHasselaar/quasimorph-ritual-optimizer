@@ -1,17 +1,17 @@
 # Quasimorph Ritual Optimizer
 
-A Windows desktop application that exhaustively searches five-component pact rituals in **Quasimorph** and ranks clockwise ring orders for Jackpot, Upgrade, Sidegrade, low Disenchant risk, or balanced Power/Stability.
+A Windows desktop application that exhaustively searches five-component pact rituals in **Quasimorph** using the verified community affinity/probability model.
 
-## Features
+## v0.4.0
 
-- Exact brute-force search over every five-item selection and directed circular order.
-- Editable inventory with add, edit, delete, enable/disable, CSV import, and CSV export.
-- Supports all five pact tiers and all five center essences.
-- Explicit ship Power and Stability bonus fields.
-- Default ship bonus is **+100 Power / +0 Stability**; change these to match your save.
-- Top-N ranked results with complete per-component affinity breakdowns.
-- Background search, progress reporting, cancellation, and result export.
-- Automated tests and Windows executable builds through GitHub Actions.
+- Bundled inventory updated to the current 38-component list from the repository, preserving its order and availability state.
+- Ship Power/Stability bonuses now default to **0 / 0** and are persisted immediately in the user's settings file whenever a valid value is changed.
+- Inventory rows now have checkbox-style availability controls. Available rows are green; unavailable rows are red.
+- Inventory rows can be rearranged by drag-and-drop; the new order is saved to the user's inventory CSV.
+- Inventory, results, and ritual-detail views now have both horizontal and vertical scrollbars.
+- Brute-force optimization now uses multiple **processes** rather than Python threads, allowing CPU-bound searches to use multiple cores. `Workers = 0` automatically uses all logical CPUs reported by Python.
+- Added **Load bundled** so the v0.4 inventory can be adopted explicitly without automatic migration logic.
+- Multiprocessing uses Windows-compatible `spawn` semantics and deterministic tie-breaking.
 
 ## Run from source
 
@@ -24,23 +24,28 @@ python -m pip install -e .
 quasimorph-ritual-optimizer
 ```
 
-On Windows, `run_app.bat` is a convenient alternative after Python is installed.
+Or run `run_app.bat`.
 
-## Build the Windows executable
+## Windows executable
 
 ```powershell
 build_windows.bat
 ```
 
-The executable is written to `dist/QuasimorphRitualOptimizer.exe`.
+The executable is written to `dist/QuasimorphRitualOptimizer.exe`. GitHub Actions also builds the executable for version tags.
 
-## Inventory
+## Local data
 
-The first launch copies the included inventory to:
+The app stores user files at:
 
 ```text
-%APPDATA%\QuasimorphRitualOptimizer\inventory.csv
+%APPDATA%\QuasimorphRitualOptimizer\
 ```
+
+- `inventory.csv` — item order, values, and availability.
+- `settings.json` — ship Power/Stability bonuses and worker count.
+
+The bundled inventory is copied on a fresh install. Existing local inventories are not automatically migrated or overwritten. Use **Load bundled** if you want to replace your local inventory with the version shipped in the app.
 
 CSV format:
 
@@ -59,14 +64,14 @@ Power contribution = base Power × predecessor→component Power multiplier × c
 Stability contribution = base Stability × predecessor→component Stability multiplier × component→center Stability multiplier
 ```
 
-Then ship bonuses are applied:
+After summing the five components:
 
 ```text
-Total Power = sum(component Power contributions) + ship Power bonus
-Total Stability = sum(component Stability contributions) + ship Stability bonus
+Total Power = component Power total + ship Power bonus
+Total Stability = component Stability total + ship Stability bonus
 ```
 
-Effective percentages are capped at 100%:
+Then:
 
 ```text
 Power% = min(1, Total Power / tier Power target)
@@ -89,17 +94,23 @@ Jackpot = max(0, raw Upgrade − 70%)
 Upgrade = min(raw Upgrade, 70%)
 ```
 
-The five outer items form a directed circular ring, so the fifth component is the predecessor of the first. Rotations are equivalent; mirror-image orders are not.
+The five outer items form a directed circular ring. Rotations are equivalent; mirror-image orders are not.
 
-## Search size
+## Search size and parallelism
 
 The optimizer evaluates:
 
 ```text
-C(number of enabled items, 5) × 4!
+C(number of available items, 5) × 4!
 ```
 
-With 18 enabled items, this is **205,632 unique directed circular orders**.
+The v0.4 bundled list contains 38 components, 37 of which are initially available, producing **10,461,528** unique ring orders if left unchanged. Availability checkboxes are therefore useful both for modeling your actual inventory and reducing computation.
+
+The optimizer uses `ProcessPoolExecutor` because this search is CPU-bound and Python threads would remain constrained by the GIL. On a 12-thread CPU, leave **Workers** at `0` to use the detected 12 logical CPUs, or set the number manually.
+
+## Future graphical ritual view
+
+The current data model keeps item identity and clockwise order separate from the UI, so component artwork and a graphical five-slot ritual representation can be added later without changing the optimizer mathematics.
 
 ## Development
 

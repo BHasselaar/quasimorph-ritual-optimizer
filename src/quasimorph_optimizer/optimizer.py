@@ -3,8 +3,11 @@ from __future__ import annotations
 import heapq
 import itertools
 import math
+import multiprocessing
+import os
 import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import dataclass
 
 from .constants import AFFINITIES, TIER_RULES
@@ -20,6 +23,7 @@ class OptimizationSummary:
     evaluated: int
     total_candidates: int
     cancelled: bool
+    workers_used: int = 1
 
 
 OBJECTIVES: dict[str, str] = {
@@ -134,6 +138,21 @@ def objective_key(result: RitualResult, objective: str) -> tuple[float, ...]:
     raise ValueError(f"Unknown objective: {objective}")
 
 
+def _push_result(
+    heap: list[tuple[tuple[object, ...], int, RitualResult]],
+    result: RitualResult,
+    objective: str,
+    top_n: int,
+    sequence: int,
+) -> None:
+    key: tuple[object, ...] = (*objective_key(result, objective), result.order_text)
+    entry = (key, sequence, result)
+    if len(heap) < top_n:
+        heapq.heappush(heap, entry)
+    elif key > heap[0][0]:
+        heapq.heapreplace(heap, entry)
+
+
 def optimize(
     items: list[Item],
     *,
@@ -146,6 +165,7 @@ def optimize(
     progress_callback: ProgressCallback | None = None,
     cancel_event: threading.Event | None = None,
 ) -> OptimizationSummary:
+    """Single-process reference implementation used by tests and small searches."""
     enabled_items = [item for item in items if item.enabled]
     if len(enabled_items) < 5:
         raise ValueError("Enable at least five inventory items")
@@ -155,7 +175,7 @@ def optimize(
         raise ValueError("top_n must be at least 1")
 
     total = unique_ring_order_count(len(enabled_items))
-    heap: list[tuple[tuple[float, ...], int, RitualResult]] = []
+    heap: list[tuple[tuple[object, ...], int, RitualResult]] = []
     evaluated = 0
     sequence = 0
     cancelled = False
@@ -165,7 +185,6 @@ def optimize(
         if cancel_event is not None and cancel_event.is_set():
             cancelled = True
             break
-
         result = evaluate_ritual(
             order,
             center_essence=center_essence,
@@ -173,14 +192,8 @@ def optimize(
             flat_power_bonus=flat_power_bonus,
             flat_stability_bonus=flat_stability_bonus,
         )
-        key = objective_key(result, objective)
-        entry = (key, sequence, result)
+        _push_result(heap, result, objective, top_n, sequence)
         sequence += 1
-        if len(heap) < top_n:
-            heapq.heappush(heap, entry)
-        elif key > heap[0][0]:
-            heapq.heapreplace(heap, entry)
-
         evaluated += 1
         if progress_callback is not None and (evaluated % report_every == 0 or evaluated == total):
             progress_callback(evaluated, total)
@@ -191,4 +204,157 @@ def optimize(
         evaluated=evaluated,
         total_candidates=total,
         cancelled=cancelled,
+        workers_used=1,
+    )
+
+
+def _chunked_combinations(items: list[Item], chunk_size: int) -> Iterator[tuple[tuple[Item, ...], ...]]:
+    combinations = itertools.combinations(items, 5)
+    while True:
+        chunk = tuple(itertools.islice(combinations, chunk_size))
+        if not chunk:
+            return
+        yield chunk
+
+
+def _optimize_combination_chunk(
+    chunk: tuple[tuple[Item, ...], ...],
+    center_essence: str,
+    tier: int,
+    objective: str,
+    top_n: int,
+    flat_power_bonus: float,
+    flat_stability_bonus: float,
+) -> tuple[tuple[RitualResult, ...], int]:
+    """Process-pool worker. It keeps only its local top-N results."""
+    heap: list[tuple[tuple[object, ...], int, RitualResult]] = []
+    sequence = 0
+    evaluated = 0
+    for combination in chunk:
+        anchor = combination[0]
+        for remainder in itertools.permutations(combination[1:]):
+            result = evaluate_ritual(
+                (anchor, *remainder),
+                center_essence=center_essence,
+                tier=tier,
+                flat_power_bonus=flat_power_bonus,
+                flat_stability_bonus=flat_stability_bonus,
+            )
+            _push_result(heap, result, objective, top_n, sequence)
+            sequence += 1
+            evaluated += 1
+    ordered = sorted(heap, key=lambda entry: (entry[0], entry[1]), reverse=True)
+    return tuple(entry[2] for entry in ordered), evaluated
+
+
+def optimize_parallel(
+    items: list[Item],
+    *,
+    center_essence: str,
+    tier: int,
+    objective: str,
+    top_n: int = 50,
+    flat_power_bonus: float = 0.0,
+    flat_stability_bonus: float = 0.0,
+    workers: int | None = None,
+    chunk_size: int = 200,
+    progress_callback: ProgressCallback | None = None,
+    cancel_event: threading.Event | None = None,
+) -> OptimizationSummary:
+    """Use multiple processes so CPU-bound brute force can use multiple cores.
+
+    Python threads do not materially speed this workload because the evaluator is
+    CPU-bound. ProcessPoolExecutor gives each worker a separate interpreter/GIL.
+    """
+    enabled_items = [item for item in items if item.enabled]
+    if len(enabled_items) < 5:
+        raise ValueError("Enable at least five inventory items")
+    if objective not in OBJECTIVES:
+        raise ValueError(f"Unknown objective: {objective}")
+    if top_n < 1:
+        raise ValueError("top_n must be at least 1")
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be at least 1")
+
+    requested_workers = workers if workers is not None and workers > 0 else (os.cpu_count() or 1)
+    combination_count = math.comb(len(enabled_items), 5)
+    worker_count = max(1, min(int(requested_workers), combination_count))
+    if worker_count == 1:
+        return optimize(
+            enabled_items,
+            center_essence=center_essence,
+            tier=tier,
+            objective=objective,
+            top_n=top_n,
+            flat_power_bonus=flat_power_bonus,
+            flat_stability_bonus=flat_stability_bonus,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
+
+    total = unique_ring_order_count(len(enabled_items))
+    chunks = _chunked_combinations(enabled_items, chunk_size)
+    heap: list[tuple[tuple[object, ...], int, RitualResult]] = []
+    sequence = 0
+    evaluated = 0
+    cancelled = False
+    executor = ProcessPoolExecutor(max_workers=worker_count, mp_context=multiprocessing.get_context("spawn"))
+    futures = set()
+
+    def submit_next() -> bool:
+        try:
+            chunk = next(chunks)
+        except StopIteration:
+            return False
+        futures.add(
+            executor.submit(
+                _optimize_combination_chunk,
+                chunk,
+                center_essence,
+                tier,
+                objective,
+                top_n,
+                float(flat_power_bonus),
+                float(flat_stability_bonus),
+            )
+        )
+        return True
+
+    try:
+        for _ in range(worker_count * 2):
+            if not submit_next():
+                break
+
+        while futures:
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+
+            done, _ = wait(futures, return_when=FIRST_COMPLETED)
+            for future in done:
+                futures.remove(future)
+                local_results, local_evaluated = future.result()
+                evaluated += local_evaluated
+                for result in local_results:
+                    _push_result(heap, result, objective, top_n, sequence)
+                    sequence += 1
+                if progress_callback is not None:
+                    progress_callback(evaluated, total)
+
+            if cancelled:
+                for future in futures:
+                    future.cancel()
+                break
+
+            while len(futures) < worker_count * 2 and submit_next():
+                pass
+    finally:
+        executor.shutdown(wait=True, cancel_futures=cancelled)
+
+    ordered = sorted(heap, key=lambda entry: (entry[0], entry[1]), reverse=True)
+    return OptimizationSummary(
+        results=tuple(entry[2] for entry in ordered),
+        evaluated=evaluated,
+        total_candidates=total,
+        cancelled=cancelled,
+        workers_used=worker_count,
     )

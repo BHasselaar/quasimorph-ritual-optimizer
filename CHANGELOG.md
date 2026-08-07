@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+- Updated bundled inventory to the repository's current 38-item list/order.
+- Added persistent ship bonus and worker settings; ship bonuses default to zero.
+- Added checkbox-style availability controls with green/red row states.
+- Added drag-and-drop inventory reordering with automatic save.
+- Added horizontal and vertical scrolling to inventory, results, and details.
+- Added multi-process brute-force execution with auto CPU detection and deterministic ranking.
+- Added an explicit Load bundled inventory action; no automatic inventory migration.
+- Added settings and parallel-equivalence tests.
+
 All notable changes to this project will be documented here.
 
 The project follows [Semantic Versioning](https://semver.org/).
