@@ -321,7 +321,16 @@ class RitualOptimizerApp(tk.Tk):
                 elif kind=="sprite_investigation_done":
                     info=payload
                     top=info.get("top_candidate","")
-                    if info.get("controls_establish_serialized_mapping"):
+                    mapping=info.get("authoritative_mapping",{})
+                    if mapping:
+                        self.items=[replace(x,sprite_path=mapping.get(x.internal_id,x.sprite_path)) for x in self.items]
+                        self._save_inventory(silent=True)
+                        self._photo_cache.clear()
+                        self._refresh_inventory()
+                    if info.get("authoritative_target",{}).get("icon"):
+                        msg=f"Authoritative sprite mapping resolved · {len(mapping)} component icons"
+                        if top: msg+=f" · Quasiplumbum: {top}"
+                    elif info.get("controls_establish_serialized_mapping"):
                         msg=f"Sprite mapping investigated · {info.get('candidate_count',0)} target candidates"
                         if top: msg+=f" · top: {top}"
                     else:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "quasimorph-ritual-optimizer"
-version = "0.7.0"
+version = "0.7.15"
 description = "Desktop brute-force optimizer for Quasimorph pact rituals"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -19,7 +19,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
 ]
-dependencies = ["UnityPy", "numpy>=1.26"]
+dependencies = ["UnityPy", "TypeTreeGeneratorAPI>=0.0.10", "numpy>=1.26"]
 
 [project.gui-scripts]
 quasimorph-ritual-optimizer = "quasimorph_optimizer.app:main"

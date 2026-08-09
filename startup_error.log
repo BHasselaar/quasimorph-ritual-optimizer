@@ -1,8 +1,4 @@
 Traceback (most recent call last):
   File "C:\Users\Bruno\Desktop\quasimorph-ritual-optimizer-v0.7.0-full\desktop.py", line 7, in main
     from quasimorph_optimizer.app import main as app_main
-  File "C:\Users\Bruno\Desktop\quasimorph-ritual-optimizer-v0.7.0-full\src\quasimorph_optimizer\app.py", line 17, in <module>
-    from .optimizer import OBJECTIVES, OptimizationSummary, optimize_parallel, ritual_order_count
-  File "C:\Users\Bruno\Desktop\quasimorph-ritual-optimizer-v0.7.0-full\src\quasimorph_optimizer\optimizer.py", line 12, in <module>
-    import numpy as np
-ModuleNotFoundError: No module named 'numpy'
+ModuleNotFoundError: No module named 'quasimorph_optimizer'
