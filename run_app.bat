@@ -1,16 +1,16 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title Quasimorph Ritual Optimizer v0.7.15
+title Quasimorph Ritual Optimizer v0.8.2
 
-echo Quasimorph Ritual Optimizer v0.7.15
+echo Quasimorph Ritual Optimizer v0.8.2
 echo ===================================
 echo.
 set "PYTHONPATH=%CD%\src"
 
 where py >nul 2>nul
 if %ERRORLEVEL%==0 (
-    py -3.11 -c "import UnityPy, TypeTreeGeneratorAPI, numpy" >nul 2>nul
+    py -3.11 -c "import UnityPy, numpy" >nul 2>nul
     if errorlevel 1 (
         echo ERROR: Dependencies are missing from Python 3.11.
         echo Run: py -3.11 -m pip install -e .

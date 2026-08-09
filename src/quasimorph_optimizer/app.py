@@ -1,55 +1,140 @@
 from __future__ import annotations
 
 import csv
-import math
 import multiprocessing
-import os
 import queue
 import threading
 import tkinter as tk
 from dataclasses import replace
 from pathlib import Path
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from .constants import ESSENCES, TIER_RULES
 from .game_data import GameDatabase, detect_game_path, load_cached_game_database, parse_resources_assets, save_game_database, localization_diagnostic_path
-from .inventory import duplicate_name_index, ensure_user_inventory, load_inventory, reset_user_inventory_to_default, save_inventory
+from .inventory import ensure_user_inventory, load_inventory, save_inventory
 from .models import Item, RitualResult
 from .optimizer import OBJECTIVES, OptimizationSummary, optimize_parallel, ritual_order_count
 from .save_sync import find_session_saves, read_save
 from .settings import AppSettings, load_settings, save_settings, user_data_dir
-from .sprites import extract_component_sprites, sprite_cache_dir, sprite_report_path
-from .sprite_investigator import investigate_item_sprite_mapping
+from .sprites import extract_component_sprites, sprite_cache_dir
 from .version import __version__
 
 
-class ItemDialog(simpledialog.Dialog):
-    def __init__(self, parent, title, item: Item | None = None):
-        self.item=item; self.result_item=None; super().__init__(parent,title)
-    def body(self, master):
-        labels=("Name","Internal ID","Essence","Power","Stability","Price","Quantity","Available")
-        for r,label in enumerate(labels): ttk.Label(master,text=label).grid(row=r,column=0,sticky="w",padx=6,pady=4)
-        i=self.item
-        self.name=tk.StringVar(value=i.name if i else ""); self.iid=tk.StringVar(value=i.internal_id if i else "")
-        self.ess=tk.StringVar(value=i.essence if i else "siaira"); self.power=tk.StringVar(value=f"{i.power:g}" if i else "0")
-        self.stab=tk.StringVar(value=f"{i.stability:g}" if i else "0"); self.price=tk.StringVar(value=f"{i.price:g}" if i else "0"); self.qty=tk.StringVar(value=str(i.quantity if i else 1))
-        self.enabled=tk.BooleanVar(value=i.enabled if i else True)
-        e=ttk.Entry(master,textvariable=self.name,width=36); e.grid(row=0,column=1,sticky="ew",padx=6,pady=4)
-        ttk.Entry(master,textvariable=self.iid).grid(row=1,column=1,sticky="ew",padx=6,pady=4)
-        ttk.Combobox(master,textvariable=self.ess,values=ESSENCES,state="readonly").grid(row=2,column=1,sticky="ew",padx=6,pady=4)
-        ttk.Entry(master,textvariable=self.power).grid(row=3,column=1,sticky="ew",padx=6,pady=4)
-        ttk.Entry(master,textvariable=self.stab).grid(row=4,column=1,sticky="ew",padx=6,pady=4)
-        ttk.Entry(master,textvariable=self.price).grid(row=5,column=1,sticky="ew",padx=6,pady=4)
-        ttk.Entry(master,textvariable=self.qty).grid(row=6,column=1,sticky="ew",padx=6,pady=4)
-        ttk.Checkbutton(master,variable=self.enabled).grid(row=7,column=1,sticky="w",padx=6,pady=4)
-        master.columnconfigure(1,weight=1); return e
-    def validate(self):
-        try:
-            self.result_item=Item(self.name.get(),self.ess.get(),float(self.power.get()),float(self.stab.get()),self.enabled.get(),
-                                  self.iid.get(),int(self.qty.get()),self.item.max_stack if self.item else 1,
-                                  self.item.sprite_path if self.item else "", float(self.price.get()))
-            return True
-        except ValueError as exc: messagebox.showerror("Invalid item",str(exc),parent=self); return False
+RUNTIME_PLACEHOLDER_SPRITE_FILENAMES = {
+    "iconOneSlotPlaceholder.png",
+    "iconTwoSlotPlaceholder.png",
+    "smallIconPlaceholder.png",
+    "shadowPlaceholder.png",
+}
+SPRITE_FRAME_SIZE = 60
+SPRITE_CONTENT_SIZE = 44
+SPRITE_MAX_SCALE = 3.0
+
+
+def _is_runtime_placeholder_sprite_path(sprite_path: str) -> bool:
+    if not sprite_path:
+        return False
+    path = Path(sprite_path)
+    return (
+        path.name in RUNTIME_PLACEHOLDER_SPRITE_FILENAMES
+        or "runtime_fallback_icons" in path.parts
+    )
+
+
+def _cached_sprite_path(internal_id: str) -> str:
+    if not internal_id:
+        return ""
+    candidate = sprite_cache_dir() / f"{internal_id}.png"
+    return str(candidate) if candidate.exists() else ""
+
+
+def _clean_preserved_sprite_path(internal_id: str, sprite_path: str) -> str:
+    if _is_runtime_placeholder_sprite_path(sprite_path):
+        return _cached_sprite_path(internal_id)
+    if sprite_path and Path(sprite_path).exists():
+        return sprite_path
+    return _cached_sprite_path(internal_id)
+
+
+def _sprite_path_after_component_refresh(
+    item: Item,
+    sprite_mapping: dict[str, str],
+) -> str:
+    mapped = sprite_mapping.get(item.internal_id)
+    if mapped:
+        return mapped
+    return _clean_preserved_sprite_path(item.internal_id, item.sprite_path)
+
+
+def _component_sprite_missing(item: Item) -> bool:
+    if not item.internal_id:
+        return False
+    if not item.sprite_path:
+        return True
+    return not Path(item.sprite_path).exists()
+
+
+def _fit_sprite_content_size(
+    width: int,
+    height: int,
+    *,
+    max_width: int = SPRITE_CONTENT_SIZE,
+    max_height: int = SPRITE_CONTENT_SIZE,
+    max_scale: float = SPRITE_MAX_SCALE,
+) -> tuple[int, int]:
+    width = max(1, int(width))
+    height = max(1, int(height))
+    scale = min(max_width / width, max_height / height, max_scale)
+    return max(1, round(width * scale)), max(1, round(height * scale))
+
+
+def _photo_is_transparent(image: tk.PhotoImage, x: int, y: int) -> bool:
+    try:
+        return bool(image.transparency_get(x, y))
+    except (AttributeError, tk.TclError):
+        return False
+
+
+def _photo_visible_bbox(image: tk.PhotoImage) -> tuple[int, int, int, int]:
+    width, height = max(1, image.width()), max(1, image.height())
+    left, top, right, bottom = width, height, -1, -1
+    for y in range(height):
+        for x in range(width):
+            if _photo_is_transparent(image, x, y):
+                continue
+            left = min(left, x)
+            top = min(top, y)
+            right = max(right, x)
+            bottom = max(bottom, y)
+    if right < left or bottom < top:
+        return 0, 0, width, height
+    return left, top, right + 1, bottom + 1
+
+
+def _photo_color_hex(color) -> str:
+    if isinstance(color, tuple):
+        r, g, b = (int(x) for x in color[:3])
+        return f"#{r:02x}{g:02x}{b:02x}"
+    return str(color)
+
+
+def _normalized_sprite_photo(source: tk.PhotoImage) -> tk.PhotoImage:
+    left, top, right, bottom = _photo_visible_bbox(source)
+    source_w = max(1, right - left)
+    source_h = max(1, bottom - top)
+    target_w, target_h = _fit_sprite_content_size(source_w, source_h)
+    target = tk.PhotoImage(width=SPRITE_FRAME_SIZE, height=SPRITE_FRAME_SIZE)
+    offset_x = (SPRITE_FRAME_SIZE - target_w) // 2
+    offset_y = (SPRITE_FRAME_SIZE - target_h) // 2
+
+    for dy in range(target_h):
+        sy = top + min(source_h - 1, int(dy * source_h / target_h))
+        for dx in range(target_w):
+            sx = left + min(source_w - 1, int(dx * source_w / target_w))
+            if _photo_is_transparent(source, sx, sy):
+                continue
+            target.put(_photo_color_hex(source.get(sx, sy)), to=(offset_x + dx, offset_y + dy))
+    return target
 
 
 class RitualOptimizerApp(tk.Tk):
@@ -70,8 +155,7 @@ class RitualOptimizerApp(tk.Tk):
         ttk.Button(sync,text="Sync game + latest save",command=self._sync_game_and_save).pack(side=tk.LEFT,padx=4)
         ttk.Button(sync,text="Choose game folder",command=self._choose_game).pack(side=tk.LEFT,padx=4)
         ttk.Button(sync,text="Choose save",command=self._choose_save).pack(side=tk.LEFT,padx=4)
-        ttk.Button(sync,text="Extract ritual sprites",command=self._start_sprite_extract).pack(side=tk.LEFT,padx=4)
-        ttk.Button(sync,text="Investigate item→sprite mapping",command=self._investigate_sprite_mapping).pack(side=tk.LEFT,padx=4)
+        ttk.Button(sync,text="Refresh component sprites",command=self._refresh_component_sprites).pack(side=tk.LEFT,padx=4)
         self.sync_status=tk.StringVar(value="Manual mode")
         ttk.Label(sync,textvariable=self.sync_status).pack(side=tk.RIGHT,padx=8)
 
@@ -79,10 +163,7 @@ class RitualOptimizerApp(tk.Tk):
         inv=ttk.Labelframe(outer,text="Components — checkbox include/exclude; drag to reorder"); opt=ttk.Frame(outer)
         outer.add(inv,weight=1); outer.add(opt,weight=3)
 
-        bar=ttk.Frame(inv); bar.pack(fill=tk.X,padx=6,pady=6)
-        for text,cmd in (("Add",self._add_item),("Edit",self._edit_item),("Delete",self._delete_item),("Save",self._save_inventory),("Import CSV",self._import_inventory),("Export CSV",self._export_inventory),("Load bundled",self._load_bundled_inventory)):
-            ttk.Button(bar,text=text,command=cmd).pack(side=tk.LEFT,padx=2)
-        sb=ttk.Frame(inv); sb.pack(fill=tk.X,padx=6,pady=(0,6)); ttk.Label(sb,text="Search").pack(side=tk.LEFT,padx=(0,5))
+        sb=ttk.Frame(inv); sb.pack(fill=tk.X,padx=6,pady=6); ttk.Label(sb,text="Search").pack(side=tk.LEFT,padx=(0,5))
         self.inventory_search_var=tk.StringVar(); ttk.Entry(sb,textvariable=self.inventory_search_var).pack(side=tk.LEFT,fill=tk.X,expand=True)
         ttk.Button(sb,text="Clear",command=lambda:self.inventory_search_var.set("")).pack(side=tk.LEFT,padx=5); self.inventory_search_var.trace_add("write",lambda *_:self._refresh_inventory())
 
@@ -98,7 +179,7 @@ class RitualOptimizerApp(tk.Tk):
         vs=ttk.Scrollbar(box,orient=tk.VERTICAL,command=self.inventory_tree.yview); hs=ttk.Scrollbar(box,orient=tk.HORIZONTAL,command=self.inventory_tree.xview)
         self.inventory_tree.configure(yscrollcommand=vs.set,xscrollcommand=hs.set); self.inventory_tree.grid(row=0,column=0,sticky="nsew"); vs.grid(row=0,column=1,sticky="ns"); hs.grid(row=1,column=0,sticky="ew")
         self.inventory_tree.tag_configure("available",background="#dff2df",foreground="#123b12"); self.inventory_tree.tag_configure("unavailable",background="#f3dddd",foreground="#5a1515")
-        self.inventory_tree.bind("<ButtonPress-1>",self._inventory_press); self.inventory_tree.bind("<B1-Motion>",self._inventory_drag); self.inventory_tree.bind("<ButtonRelease-1>",self._inventory_release); self.inventory_tree.bind("<Double-1>",self._inventory_double_click)
+        self.inventory_tree.bind("<ButtonPress-1>",self._inventory_press); self.inventory_tree.bind("<B1-Motion>",self._inventory_drag); self.inventory_tree.bind("<ButtonRelease-1>",self._inventory_release)
 
         controls=ttk.Labelframe(opt,text="Ritual settings"); controls.pack(fill=tk.X,padx=6,pady=(0,8))
         self.tier_var=tk.IntVar(value=1); self.center_var=tk.StringVar(value="eon"); self.objective_var=tk.StringVar(value="balanced"); self.top_n_var=tk.IntVar(value=10000)
@@ -141,23 +222,7 @@ class RitualOptimizerApp(tk.Tk):
         if not path or not Path(path).exists(): return None
         if path not in self._photo_cache:
             try:
-                img=tk.PhotoImage(file=path)
-                max_w,max_h=60,60
-                w,h=max(1,img.width()),max(1,img.height())
-
-                # Shrink oversized images until BOTH dimensions fit.
-                shrink=max(1,math.ceil(w/max_w),math.ceil(h/max_h))
-                if shrink>1:
-                    img=img.subsample(shrink,shrink)
-                    w,h=max(1,img.width()),max(1,img.height())
-
-                # Enlarge small sprites while preserving aspect ratio. Limit
-                # integer zoom to keep pixel art crisp.
-                grow=max(1,min(max_w//w,max_h//h,3))
-                if grow>1:
-                    img=img.zoom(grow,grow)
-
-                self._photo_cache[path]=img
+                self._photo_cache[path]=_normalized_sprite_photo(tk.PhotoImage(file=path))
             except tk.TclError:
                 self._photo_cache[path]=None
         return self._photo_cache[path]
@@ -201,40 +266,13 @@ class RitualOptimizerApp(tk.Tk):
         if self._drag_source and not self._inventory_sort_column and not self.inventory_search_var.get():
             order=[int(x) for x in self.inventory_tree.get_children()]; self.items=[self.items[i] for i in order]; self._save_inventory(silent=True); self._refresh_inventory()
         self._drag_source=None
-    def _inventory_double_click(self,event):
-        if self.inventory_tree.identify_column(event.x)!="#1": self._edit_item()
     def _toggle_item(self,index=None):
         index=self._selected_inventory_index() if index is None else index
         if index is None:return
         x=self.items[index]; qty=x.quantity if x.quantity>0 else 1; self.items[index]=replace(x,enabled=not x.enabled,quantity=qty); self._save_inventory(silent=True); self._refresh_inventory(index)
-    def _add_item(self):
-        d=ItemDialog(self,"Add component");
-        if d.result_item:
-            if duplicate_name_index(self.items,d.result_item.name) is not None: messagebox.showerror("Duplicate component","A component with that name already exists."); return
-            self.items.append(d.result_item); self._save_inventory(silent=True); self._refresh_inventory()
-    def _edit_item(self):
-        idx=self._selected_inventory_index();
-        if idx is None:return
-        d=ItemDialog(self,"Edit component",self.items[idx])
-        if d.result_item:
-            if duplicate_name_index(self.items,d.result_item.name,idx) is not None: messagebox.showerror("Duplicate component","A component with that name already exists."); return
-            self.items[idx]=d.result_item; self._save_inventory(silent=True); self._refresh_inventory(idx)
-    def _delete_item(self):
-        idx=self._selected_inventory_index();
-        if idx is not None and messagebox.askyesno("Delete component",f"Delete {self.items[idx].name}?"): del self.items[idx]; self._save_inventory(silent=True); self._refresh_inventory()
     def _save_inventory(self,silent=False):
         try: save_inventory(self.inventory_path,self.items); (not silent) and messagebox.showinfo("Inventory saved",str(self.inventory_path))
         except OSError as exc: messagebox.showerror("Save failed",str(exc))
-    def _import_inventory(self):
-        f=filedialog.askopenfilename(filetypes=[("CSV","*.csv")]);
-        if f:
-            try:self.items=load_inventory(Path(f));self._save_inventory(silent=True);self._refresh_inventory()
-            except Exception as exc:messagebox.showerror("Import failed",str(exc))
-    def _export_inventory(self):
-        f=filedialog.asksaveasfilename(defaultextension=".csv",filetypes=[("CSV","*.csv")]);
-        if f: save_inventory(Path(f),self.items)
-    def _load_bundled_inventory(self):
-        if messagebox.askyesno("Load bundled inventory","Replace the local inventory with the bundled manual list?"): self.inventory_path=reset_user_inventory_to_default();self.items=load_inventory(self.inventory_path);self._refresh_inventory()
 
     def _choose_game(self):
         d=filedialog.askdirectory(title="Select Quasimorph installation folder",initialdir=self.settings.game_path or None)
@@ -252,22 +290,37 @@ class RitualOptimizerApp(tk.Tk):
             db=parse_resources_assets(game/"Quasimorph_Data"/"resources.assets"); save_game_database(db); self.game_db=db; self.game_rules=db.rules
             save_path=Path(self.settings.save_path) if self.settings.save_path and Path(self.settings.save_path).exists() else (find_session_saves()[0] if find_session_saves() else None)
             snapshot=read_save(save_path) if save_path else None
-            cache=sprite_cache_dir(); new=[]
+            previous_sprites={
+                x.internal_id: _clean_preserved_sprite_path(
+                    x.internal_id,
+                    x.sprite_path,
+                )
+                for x in self.items
+                if x.internal_id
+            }
+            new=[]
             for base in db.items:
-                qty=snapshot.quantities.get(base.internal_id,0) if snapshot else 0; spr=cache/f"{base.internal_id}.png"
-                new.append(replace(base,quantity=qty,enabled=qty>0,sprite_path=str(spr) if spr.exists() else ""))
+                qty=snapshot.quantities.get(base.internal_id,0) if snapshot else 0
+                new.append(replace(base,quantity=qty,enabled=qty>0,sprite_path=previous_sprites.get(base.internal_id,"")))
             self.items=new; self.inventory_path=user_data_dir()/"inventory.csv"; self._save_inventory(silent=True)
             self.settings.game_path=str(game); self.settings.save_path=str(save_path) if save_path else ""; self.sync_var.set(bool(snapshot))
             if snapshot:self.flat_power_var.set(f"{snapshot.power_bonus:g}");self.flat_stability_var.set(f"{snapshot.stability_bonus:g}")
             self._settings_changed(); self._photo_cache.clear(); self._refresh_inventory()
             loc_diag=localization_diagnostic_path()
-            self.sync_status.set(
+            imported_msg = (
                 f"Imported {len(new)} ritual components · exact localization"
                 +(f" · {save_path.name}" if save_path else "")
                 +(f" · localization: {loc_diag.name}" if loc_diag.exists() else "")
             )
+            if any(_component_sprite_missing(x) for x in self.items):
+                self._start_component_sprite_refresh(
+                    game,
+                    "Refreshing missing component sprites…",
+                )
+            else:
+                self.sync_status.set(imported_msg)
         except Exception as exc:messagebox.showerror("Game sync failed",str(exc));self.sync_status.set("Sync failed")
-    def _investigate_sprite_mapping(self):
+    def _refresh_component_sprites(self):
         game=detect_game_path(self.settings.game_path)
         if not game:
             messagebox.showerror(
@@ -276,24 +329,27 @@ class RitualOptimizerApp(tk.Tk):
             )
             return
 
-        self.sync_status.set("Investigating item→sprite mapping…")
+        self._start_component_sprite_refresh(game)
+
+    def _start_component_sprite_refresh(
+        self,
+        game: Path,
+        status: str = "Refreshing component sprites…",
+    ):
+        self.sync_status.set(status)
+        items_snapshot = list(self.items)
 
         def work():
             try:
-                result=investigate_item_sprite_mapping(game)
-                self.worker_queue.put(("sprite_investigation_done",result))
+                name_mapping=extract_component_sprites(game,items_snapshot)
+                result={
+                    "component_count":len(items_snapshot),
+                    "name_mapping":name_mapping,
+                }
+                self.worker_queue.put(("component_sprites_done",result))
             except Exception as exc:
-                self.worker_queue.put(("sprite_investigation_error",exc))
+                self.worker_queue.put(("component_sprites_error",exc))
 
-        threading.Thread(target=work,daemon=True).start()
-
-    def _start_sprite_extract(self):
-        game=detect_game_path(self.settings.game_path)
-        if not game: messagebox.showerror("Game not found","Choose or sync the Quasimorph game folder first.");return
-        self.sync_status.set("Extracting ritual sprites…")
-        def work():
-            try:self.worker_queue.put(("sprites_done",extract_component_sprites(game,[x for x in self.items if x.internal_id])))
-            except Exception as exc:self.worker_queue.put(("sprites_error",exc))
         threading.Thread(target=work,daemon=True).start()
 
     def _start_optimization(self):
@@ -318,40 +374,31 @@ class RitualOptimizerApp(tk.Tk):
                 if kind=="progress":d,t=payload;self.progress.configure(value=d/t*100 if t else 0);self.status_var.set(f"Evaluated {d:,} / {t:,}")
                 elif kind=="done":self._finish_optimization(payload)
                 elif kind=="error":self._reset_worker_buttons();messagebox.showerror("Optimization failed",str(payload));self.status_var.set("Failed")
-                elif kind=="sprite_investigation_done":
+                elif kind=="component_sprites_done":
                     info=payload
-                    top=info.get("top_candidate","")
-                    mapping=info.get("authoritative_mapping",{})
-                    if mapping:
-                        self.items=[replace(x,sprite_path=mapping.get(x.internal_id,x.sprite_path)) for x in self.items]
-                        self._save_inventory(silent=True)
-                        self._photo_cache.clear()
-                        self._refresh_inventory()
-                    if info.get("authoritative_target",{}).get("icon"):
-                        msg=f"Authoritative sprite mapping resolved · {len(mapping)} component icons"
-                        if top: msg+=f" · Quasiplumbum: {top}"
-                    elif info.get("controls_establish_serialized_mapping"):
-                        msg=f"Sprite mapping investigated · {info.get('candidate_count',0)} target candidates"
-                        if top: msg+=f" · top: {top}"
-                    else:
-                        msg="Sprite mapping investigated · association appears runtime/code-driven"
-                    self.sync_status.set(msg)
-                    try:
-                        os.startfile(info["index_html"])
-                    except Exception:
-                        pass
-                elif kind=="sprite_investigation_error":
-                    messagebox.showerror("Sprite mapping investigation failed",str(payload))
-                    self.sync_status.set("Sprite mapping investigation failed")
-                elif kind=="sprites_done":
-                    mapping=payload
-                    self.items=[replace(x,sprite_path=mapping.get(x.internal_id,x.sprite_path)) for x in self.items]
+                    name_mapping=info.get("name_mapping",{})
+                    self.items=[
+                        replace(
+                            x,
+                            sprite_path=_sprite_path_after_component_refresh(
+                                x,
+                                name_mapping,
+                            ),
+                        )
+                        for x in self.items
+                    ]
                     self._save_inventory(silent=True)
                     self._photo_cache.clear()
                     self._refresh_inventory()
-                    report_path=sprite_report_path()
-                    self.sync_status.set(f"Extracted {len(mapping)} ritual sprites · report: {report_path.name}")
-                elif kind=="sprites_error":messagebox.showerror("Sprite extraction failed",str(payload));self.sync_status.set("Sprite extraction failed")
+                    total=info.get("component_count",len(name_mapping))
+                    msg=(
+                        "Component sprites refreshed · "
+                        f"{len(name_mapping)} / {total} confirmed aliases applied"
+                    )
+                    self.sync_status.set(msg)
+                elif kind=="component_sprites_error":
+                    messagebox.showerror("Component sprite refresh failed",str(payload))
+                    self.sync_status.set("Component sprite refresh failed")
         except queue.Empty:pass
         self.after(100,self._poll_worker)
     def _reset_worker_buttons(self):self.optimize_button.configure(state=tk.NORMAL);self.cancel_button.configure(state=tk.DISABLED)

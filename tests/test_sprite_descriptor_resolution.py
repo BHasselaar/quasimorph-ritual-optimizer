@@ -114,7 +114,7 @@ def test_collection_is_discovered_by_exact_target_id_without_metadata(monkeypatc
     assert report["items"]["moon_armor_plates"]["icon"]["asset_name"] == "quasiplumbum_inv"
 
 
-def test_runtime_placeholder_is_used_when_descriptor_icon_is_null(monkeypatch, tmp_path: Path):
+def test_runtime_placeholder_is_diagnostic_when_descriptor_icon_is_null(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(si, "_safe_asset_image", lambda obj, destination: "")
 
     collection = {
@@ -167,15 +167,19 @@ def test_runtime_placeholder_is_used_when_descriptor_icon_is_null(monkeypatch, t
     )
 
     resolved = report["items"]["moon_armor_plates"]
-    assert resolved["icon_source"] == "ItemFactory.ResolveIcon placeholder"
+    assert "icon_source" not in resolved
+    assert "icon" not in resolved
+    assert "image" not in resolved
+    assert resolved["runtime_placeholder_source"] == "ItemFactory.ResolveIcon"
     assert resolved["placeholder_decision"] == {
         "InventoryWidthSize": 2,
         "field": "_iconTwoSlotPlaceholder",
     }
-    assert resolved["icon"]["asset_name"] == "two_slot_placeholder"
+    assert resolved["runtime_placeholder_icon"]["asset_name"] == "two_slot_placeholder"
+    assert resolved["error"] == "ItemContentDescriptor._icon is null; no component-specific icon was decoded."
 
 
-def test_global_runtime_placeholder_applies_after_all_assets_are_scanned():
+def test_global_runtime_placeholder_annotation_keeps_item_unmapped():
     report = {
         "authoritative_descriptor_resolution": {
             "item_factory_fallbacks": {
@@ -207,16 +211,56 @@ def test_global_runtime_placeholder_applies_after_all_assets_are_scanned():
         }
     }
 
-    si._apply_runtime_icon_fallbacks(report)
+    si._annotate_runtime_icon_fallbacks(report)
 
     resolved = report["authoritative_descriptor_resolution"]["items"]["moon_armor_plates"]
-    assert resolved["icon_source"] == "ItemFactory.ResolveIcon placeholder"
+    assert "icon_source" not in resolved
+    assert "icon" not in resolved
+    assert "image" not in resolved
+    assert resolved["runtime_placeholder_source"] == "ItemFactory.ResolveIcon"
     assert resolved["placeholder_decision"] == {
         "InventoryWidthSize": 1,
         "field": "_iconOneSlotPlaceholder",
     }
-    assert resolved["icon"]["asset_name"] == "item_placeholder_one_inv"
-    assert "error" not in resolved
+    assert resolved["runtime_placeholder_icon"]["asset_name"] == "item_placeholder_one_inv"
+    assert resolved["error"] == "ItemContentDescriptor._icon is null or was not decoded."
+
+
+def test_exact_alias_promotes_known_sprite_without_using_placeholder():
+    descriptor_scan = {
+        "items": {
+            "moon_armor_plates": {
+                "runtime_placeholder_icon": {
+                    "asset_name": "item_placeholder_one_inv",
+                    "image": "runtime_fallback_icons/iconOneSlotPlaceholder.png",
+                },
+                "error": "ItemContentDescriptor._icon is null or was not decoded.",
+            },
+            "mars_gear": {
+                "error": "Descriptor reference is null or malformed.",
+            },
+        }
+    }
+
+    exact = si._apply_exact_alias_sprites(
+        descriptor_scan,
+        {
+            "moon_armor_plates": "sprites/moon_armor_plates.png",
+            "mars_gear": "sprites/mars_gear.png",
+        },
+    )
+
+    quasiplumbum = descriptor_scan["items"]["moon_armor_plates"]
+    assert quasiplumbum["icon_source"] == "EXACT_SPRITE_ALIASES"
+    assert quasiplumbum["icon"]["asset_name"] == "moon_armor_inv"
+    assert quasiplumbum["image"] == "sprites/moon_armor_plates.png"
+    assert quasiplumbum["runtime_placeholder_icon"]["asset_name"] == "item_placeholder_one_inv"
+    assert quasiplumbum["descriptor_error"] == "ItemContentDescriptor._icon is null or was not decoded."
+    assert quasiplumbum["error"] == ""
+
+    mars_gear = descriptor_scan["items"]["mars_gear"]
+    assert mars_gear["icon"]["asset_name"] == "mars_gear_inv"
+    assert exact["mars_gear"]["asset_name"] == "mars_gear_inv"
 
 
 def test_config_items_records_keep_inventory_width():

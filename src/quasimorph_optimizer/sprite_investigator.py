@@ -8,13 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from .settings import user_data_dir
+from .sprites import EXACT_SPRITE_ALIASES, extract_exact_sprite_aliases
 
 
-CONTROL_PAIRS = {
-    "venus_weapon_parts": "aztKey_inv",
-    "roasted_human_skin": "slanina_inv",
-    "impaler": "impaler_inv",
-}
 TARGET_ITEM_ID = "moon_armor_plates"
 ITEM_FACTORY_PLACEHOLDERS = (
     "_iconOneSlotPlaceholder",
@@ -641,7 +637,7 @@ def _choose_runtime_icon_placeholder_for_record(
     return field_name, placeholder, width
 
 
-def _apply_runtime_icon_fallbacks(report: dict) -> None:
+def _annotate_runtime_icon_fallbacks(report: dict) -> None:
     descriptor_scan = report.get("authoritative_descriptor_resolution", {})
     factory_fallbacks = descriptor_scan.get("item_factory_fallbacks", {})
     if not factory_fallbacks.get("placeholders"):
@@ -661,20 +657,64 @@ def _apply_runtime_icon_fallbacks(report: dict) -> None:
         if not placeholder or not placeholder.get("icon"):
             continue
 
-        entry["icon_source"] = "ItemFactory.ResolveIcon placeholder"
+        entry["runtime_placeholder_source"] = "ItemFactory.ResolveIcon"
         entry["placeholder_decision"] = {
             "InventoryWidthSize": width,
             "field": field_name,
         }
-        entry["icon_reference"] = placeholder.get("reference")
-        entry["icon"] = placeholder["icon"]
-        if placeholder.get("image"):
-            entry["image"] = placeholder["image"]
-        entry.pop("error", None)
+        entry["runtime_placeholder_reference"] = placeholder.get("reference")
+        entry["runtime_placeholder_icon"] = placeholder["icon"]
         entry["warning"] = (
-            "ItemContentDescriptor._icon is null; the game uses "
-            "ItemFactory.ResolveIcon's slot placeholder."
+            "ItemContentDescriptor._icon is null. ItemFactory.ResolveIcon "
+            "would show this placeholder at runtime, but it is not a "
+            "component-specific sprite and is not applied to the optimizer."
         )
+
+
+def _apply_exact_alias_sprites(
+    descriptor_scan: dict,
+    exact_alias_paths: dict[str, str],
+) -> dict[str, dict]:
+    """Promote curated exact aliases without treating placeholders as icons."""
+    exact_alias_items: dict[str, dict] = {}
+    items = descriptor_scan.get("items", {})
+
+    for item_id, image_path in sorted(exact_alias_paths.items()):
+        entry = items.get(item_id)
+        if not isinstance(entry, dict):
+            continue
+        if (
+            entry.get("image")
+            and entry.get("icon_source") == "ItemContentDescriptor._icon"
+        ):
+            continue
+
+        aliases = EXACT_SPRITE_ALIASES.get(item_id, ())
+        asset_name = aliases[0] if aliases else ""
+        icon = {
+            "file": "",
+            "path_id": "",
+            "type": "Texture2D/Sprite",
+            "asset_name": asset_name,
+            "image": image_path,
+        }
+        if entry.get("error"):
+            entry["descriptor_error"] = entry["error"]
+        entry["icon"] = icon
+        entry["icon_source"] = "EXACT_SPRITE_ALIASES"
+        entry["exact_alias_candidates"] = list(aliases)
+        entry["exact_alias_icon"] = icon
+        entry["image"] = image_path
+        entry["error"] = ""
+        exact_alias_items[item_id] = {
+            "source": "EXACT_SPRITE_ALIASES",
+            "asset_name": asset_name,
+            "aliases": list(aliases),
+            "image": image_path,
+        }
+
+    descriptor_scan["exact_alias_mapping"] = exact_alias_items
+    return exact_alias_items
 
 
 def _resolve_descriptor_collection(
@@ -797,6 +837,7 @@ def _resolve_descriptor_collection(
             continue
 
         contains_target = TARGET_ITEM_ID in ids
+        is_pactcomponents = meta.get("name", "") == "pactcomponents_descriptors"
         collection = {
             "file": asset_file.name,
             "path_id": collection_pid,
@@ -805,13 +846,15 @@ def _resolve_descriptor_collection(
             "id_count": len(ids),
             "descriptor_count": len(descriptors),
             "contains_target": contains_target,
+            "is_pactcomponents": is_pactcomponents,
             "decode_method": decode_method,
         }
         result["descriptor_array_candidates"].append(collection.copy())
 
         # DescriptorsCollection is used by several config sections. The pact
-        # component collection is identified authoritatively by its exact ID.
-        if not contains_target:
+        # component collection is identified by its Resource path/name. The
+        # target-id fallback preserves older report/test compatibility.
+        if not is_pactcomponents and not contains_target:
             continue
         result["collections_found"].append(collection)
 
@@ -888,19 +931,19 @@ def _resolve_descriptor_collection(
                     factory_fallbacks=result["item_factory_fallbacks"],
                 )
                 if placeholder and placeholder.get("icon"):
-                    entry["icon_source"] = "ItemFactory.ResolveIcon placeholder"
+                    entry["runtime_placeholder_source"] = "ItemFactory.ResolveIcon"
                     entry["placeholder_decision"] = {
                         "InventoryWidthSize": width,
                         "field": field_name,
                     }
-                    entry["icon_reference"] = placeholder.get("reference")
-                    entry["icon"] = placeholder["icon"]
-                    if placeholder.get("image"):
-                        entry["image"] = placeholder["image"]
+                    entry["runtime_placeholder_reference"] = placeholder.get("reference")
+                    entry["runtime_placeholder_icon"] = placeholder["icon"]
                     entry["warning"] = (
-                        "ItemContentDescriptor._icon is null; the game uses "
-                        "ItemFactory.ResolveIcon's slot placeholder."
+                        "ItemContentDescriptor._icon is null. ItemFactory.ResolveIcon "
+                        "would show this placeholder at runtime, but it is not a "
+                        "component-specific sprite and is not applied to the optimizer."
                     )
+                    entry["error"] = "ItemContentDescriptor._icon is null; no component-specific icon was decoded."
                     continue
                 entry["error"] = "ItemContentDescriptor._icon is null or was not decoded."
                 continue
@@ -971,24 +1014,23 @@ def _resolve_chain(
 
 def investigate_item_sprite_mapping(game_path: Path) -> dict:
     """
-    Discover how Quasimorph connects item records/descriptors to inventory art.
+    Export authoritative ritual-component inventory art.
 
-    Controls:
-      venus_weapon_parts <-> aztKey_inv
-      roasted_human_skin <-> slanina_inv
-      impaler <-> impaler_inv
+    Runtime path reproduced here:
 
-    Target:
-      moon_armor_plates
+      DescriptorsCollections/pactcomponents_descriptors
+      _ids[index] -> _descriptors[index] -> ItemContentDescriptor._icon
 
-    The investigator does not guess the target sprite name. It compares the
-    serialized reference topology used by known-good controls and reports visual
-    objects reachable from the target through the same object graph.
+    If _icon is null, ItemFactory.ResolveIcon can still show the one-slot or
+    two-slot placeholder at runtime according to ItemRecord.InventoryWidthSize.
+    Those placeholders are diagnostic only here because they are generic
+    unknown-item art, not component-specific sprites. Blank InventoryWidthSize
+    cells keep ItemRecord's constructor default of 1.
     """
     try:
         import UnityPy
     except ImportError as exc:
-        raise RuntimeError("Sprite mapping investigation requires UnityPy.") from exc
+        raise RuntimeError("Component sprite export requires UnityPy.") from exc
 
     data_dir = game_path / "Quasimorph_Data"
     asset_files = [data_dir / "resources.assets"] + sorted(data_dir.glob("sharedassets*.assets"))
@@ -998,14 +1040,7 @@ def investigate_item_sprite_mapping(game_path: Path) -> dict:
 
     report = {
         "game_path": str(game_path),
-        "controls": CONTROL_PAIRS,
-        "target_item_id": TARGET_ITEM_ID,
         "asset_files": [],
-        "assembly": _assembly_symbol_report(game_path),
-        "control_analysis": {},
-        "target_analysis": {},
-        "discovered_signatures": [],
-        "target_ranked_visual_candidates": [],
         "authoritative_descriptor_resolution": {
             "resource_path": "DescriptorsCollections/pactcomponents_descriptors",
             "collections_found": [],
@@ -1026,16 +1061,12 @@ def investigate_item_sprite_mapping(game_path: Path) -> dict:
     out = investigation_dir()
     out.mkdir(parents=True, exist_ok=True)
     typetree_generator = None
-    global_signatures = defaultdict(int)
-    target_candidates = defaultdict(lambda: {"score": 0, "evidence": []})
 
     for asset_file in asset_files:
         env = UnityPy.load(str(asset_file))
         by_path = {}
         trees = {}
         info = {}
-        refs_by_source = defaultdict(list)
-        reverse_refs = defaultdict(list)
 
         for obj in env.objects:
             try:
@@ -1055,26 +1086,10 @@ def investigate_item_sprite_mapping(game_path: Path) -> dict:
                 "name": name,
                 "class": cls,
             }
-            for ref in _walk_pptrs(tree):
-                refs_by_source[pid].append(ref)
-                if ref.get("file_id") == 0 and ref.get("path_id"):
-                    reverse_refs[ref["path_id"]].append({
-                        "source_path_id": pid,
-                        "field": ref.get("field", ""),
-                    })
-
-        visual_by_name = defaultdict(list)
-        for pid, meta in info.items():
-            if meta["type"] in {"Sprite", "Texture2D"} and meta["name"]:
-                visual_by_name[meta["name"]].append(pid)
 
         file_summary = {
             "file": asset_file.name,
             "object_count": len(by_path),
-            "known_visual_objects": {
-                sprite: visual_by_name.get(sprite, [])
-                for sprite in CONTROL_PAIRS.values()
-            },
         }
         report["asset_files"].append(file_summary)
 
@@ -1127,200 +1142,64 @@ def investigate_item_sprite_mapping(game_path: Path) -> dict:
             authoritative["items"]
         )
 
-        # Analyze controls.
-        for item_id, known_sprite in CONTROL_PAIRS.items():
-            entry = report["control_analysis"].setdefault(item_id, {
-                "known_sprite": known_sprite,
-                "item_text_objects": [],
-                "known_sprite_objects": [],
-                "reverse_referrers_of_known_sprite": [],
-                "item_to_visual_chains": [],
-            })
+    _annotate_runtime_icon_fallbacks(report)
 
-            item_roots = []
-            for pid, tree in trees.items():
-                hits = _exact_text_hits(tree, item_id)
-                if hits:
-                    item_roots.append(pid)
-                    entry["item_text_objects"].append({
-                        "file": asset_file.name,
-                        "path_id": pid,
-                        **info[pid],
-                        "hits": hits[:20],
-                    })
-
-            sprite_pids = visual_by_name.get(known_sprite, [])
-            for spid in sprite_pids:
-                entry["known_sprite_objects"].append({
-                    "file": asset_file.name,
-                    "path_id": spid,
-                    **info[spid],
-                })
-                for rev in reverse_refs.get(spid, []):
-                    src = rev["source_path_id"]
-                    ref_record = {
-                        "file": asset_file.name,
-                        "source_path_id": src,
-                        "field": rev["field"],
-                        **info.get(src, {}),
-                    }
-                    entry["reverse_referrers_of_known_sprite"].append(ref_record)
-                    signature = (
-                        info.get(src, {}).get("type", ""),
-                        info.get(src, {}).get("class", ""),
-                        rev["field"],
-                    )
-                    global_signatures[signature] += 1
-
-            for root in item_roots:
-                chains = _resolve_chain(root, refs_by_source, info, max_depth=3)
-                for chain in chains:
-                    final = chain["steps"][-1]
-                    rec = {
-                        "file": asset_file.name,
-                        "root_path_id": root,
-                        "root_type": info[root]["type"],
-                        "root_name": info[root]["name"],
-                        "root_class": info[root]["class"],
-                        **chain,
-                        "matches_known_sprite": final.get("name") == known_sprite,
-                    }
-                    entry["item_to_visual_chains"].append(rec)
-                    if rec["matches_known_sprite"]:
-                        fields = tuple(step["field"] for step in chain["steps"])
-                        signature = (
-                            info[root]["type"],
-                            info[root]["class"],
-                            fields,
-                        )
-                        global_signatures[signature] += 5
-
-        # Analyze target exact-text roots and their reachable visuals.
-        target_entry = report["target_analysis"].setdefault(TARGET_ITEM_ID, {
-            "item_text_objects": [],
-            "item_to_visual_chains": [],
-            "same_type_as_control_referrers": [],
-        })
-        target_roots = []
-        for pid, tree in trees.items():
-            hits = _exact_text_hits(tree, TARGET_ITEM_ID)
-            if hits:
-                target_roots.append(pid)
-                target_entry["item_text_objects"].append({
-                    "file": asset_file.name,
-                    "path_id": pid,
-                    **info[pid],
-                    "hits": hits[:20],
-                })
-
-        for root in target_roots:
-            chains = _resolve_chain(root, refs_by_source, info, max_depth=3)
-            for chain in chains:
-                rec = {
-                    "file": asset_file.name,
-                    "root_path_id": root,
-                    "root_type": info[root]["type"],
-                    "root_name": info[root]["name"],
-                    "root_class": info[root]["class"],
-                    **chain,
-                }
-                target_entry["item_to_visual_chains"].append(rec)
-
-                final = chain["steps"][-1]
-                vname = final.get("name", "")
-                if vname:
-                    score = 10
-                    fields = tuple(step["field"] for step in chain["steps"])
-                    target_sig = (info[root]["type"], info[root]["class"], fields)
-                    if target_sig in global_signatures:
-                        score += 100 * global_signatures[target_sig]
-                    target_candidates[vname]["score"] += score
-                    target_candidates[vname]["evidence"].append({
-                        "file": asset_file.name,
-                        "root_path_id": root,
-                        "fields": fields,
-                        "final_type": final.get("type", ""),
-                    })
-
-    _apply_runtime_icon_fallbacks(report)
-
-    # Summarize signatures learned from controls.
-    signatures = []
-    for signature, count in sorted(global_signatures.items(), key=lambda x: -x[1]):
-        signatures.append({
-            "signature": repr(signature),
-            "support": count,
-        })
-    report["discovered_signatures"] = signatures[:100]
-
-    ranked = []
-    for name, data in target_candidates.items():
-        ranked.append({
-            "asset_name": name,
-            "score": data["score"],
-            "evidence": data["evidence"],
-        })
-    ranked.sort(key=lambda x: (-x["score"], x["asset_name"].casefold()))
-    report["target_ranked_visual_candidates"] = ranked[:100]
-
-    # Explicit interpretation: did all three controls actually reveal a common
-    # serialized item->visual chain?
-    direct_control_matches = {}
-    for iid, entry in report["control_analysis"].items():
-        direct_control_matches[iid] = sum(
-            1 for x in entry["item_to_visual_chains"] if x.get("matches_known_sprite")
+    descriptor_scan = report["authoritative_descriptor_resolution"]
+    items = descriptor_scan["items"]
+    descriptor_resolved_items = {
+        item_id: entry
+        for item_id, entry in items.items()
+        if (
+            entry.get("image")
+            and entry.get("icon_source") == "ItemContentDescriptor._icon"
         )
-    report["control_chain_match_counts"] = direct_control_matches
-    report["controls_establish_serialized_mapping"] = all(
-        direct_control_matches.get(iid, 0) > 0 for iid in CONTROL_PAIRS
+    }
+    direct_count = sum(
+        1 for entry in descriptor_resolved_items.values()
+        if entry.get("icon_source") == "ItemContentDescriptor._icon"
     )
+    fallback_count = sum(
+        1 for entry in items.values()
+        if entry.get("runtime_placeholder_icon")
+    )
+    descriptor_unresolved_items = {
+        item_id: entry
+        for item_id, entry in items.items()
+        if not entry.get("image")
+    }
+    exact_alias_paths = extract_exact_sprite_aliases(
+        game_path,
+        set(descriptor_unresolved_items),
+    )
+    exact_alias_items = _apply_exact_alias_sprites(
+        descriptor_scan,
+        exact_alias_paths,
+    )
+    resolved_items = {
+        item_id: entry
+        for item_id, entry in items.items()
+        if entry.get("image")
+    }
+    unresolved_items = {
+        item_id: entry
+        for item_id, entry in items.items()
+        if not entry.get("image")
+    }
+    descriptor_scan["summary"] = {
+        "component_count": len(items),
+        "resolved_count": len(resolved_items),
+        "unresolved_count": len(unresolved_items),
+        "descriptor_icon_count": direct_count,
+        "descriptor_unresolved_count": len(descriptor_unresolved_items),
+        "exact_alias_count": len(exact_alias_items),
+        "runtime_placeholder_diagnostic_count": fallback_count,
+    }
 
     json_path = out / "sprite_mapping_investigation.json"
     json_path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
 
     # Human-readable HTML.
-    assembly_hits = []
-    for symbol, hits in report["assembly"].get("symbols", {}).items():
-        if hits:
-            assembly_hits.append(
-                f"<li><code>{html.escape(symbol)}</code>: {len(hits)} occurrence(s)</li>"
-            )
-
-    control_rows = []
-    for iid, entry in report["control_analysis"].items():
-        control_rows.append(
-            "<tr>"
-            f"<td><code>{html.escape(iid)}</code></td>"
-            f"<td><code>{html.escape(entry['known_sprite'])}</code></td>"
-            f"<td>{len(entry['item_text_objects'])}</td>"
-            f"<td>{len(entry['known_sprite_objects'])}</td>"
-            f"<td>{sum(1 for x in entry['item_to_visual_chains'] if x.get('matches_known_sprite'))}</td>"
-            "</tr>"
-        )
-
-    candidate_rows = []
-    for c in ranked[:30]:
-        candidate_rows.append(
-            "<tr>"
-            f"<td><code>{html.escape(c['asset_name'])}</code></td>"
-            f"<td>{c['score']}</td>"
-            f"<td>{len(c['evidence'])}</td>"
-            "</tr>"
-        )
-    if not candidate_rows:
-        candidate_rows.append("<tr><td colspan='3'>No visual candidate was reachable through serialized PPtr chains.</td></tr>")
-
-    target = report["target_analysis"].get(TARGET_ITEM_ID, {})
-    established = report["controls_establish_serialized_mapping"]
-    authoritative_target = report["authoritative_descriptor_resolution"]["items"].get(
-        TARGET_ITEM_ID, {}
-    )
-    authoritative_icon = authoritative_target.get("icon", {})
-    authoritative_name = authoritative_icon.get("asset_name", "")
-    authoritative_source = authoritative_target.get("icon_source", "")
-    placeholder_decision = authoritative_target.get("placeholder_decision", {})
-    item_record = authoritative_target.get("item_record", {})
-    descriptor_scan = report["authoritative_descriptor_resolution"]
+    summary = descriptor_scan["summary"]
     attempted_trees = sum(
         row.get("managed_trees_attempted", 0)
         for row in descriptor_scan.get("files_scanned", [])
@@ -1341,31 +1220,48 @@ def investigate_item_sprite_mapping(game_path: Path) -> dict:
         row.get("manual_trees_decoded", 0)
         for row in descriptor_scan.get("files_scanned", [])
     )
-    if authoritative_name and authoritative_source == "ItemFactory.ResolveIcon placeholder":
-        conclusion = (
-            "The game's authoritative DescriptorsCollection finds the target item, "
-            "but ItemContentDescriptor._icon is null. ItemFactory.ResolveIcon "
-            f"therefore uses the runtime placeholder sprite {authoritative_name}."
-        )
-    elif authoritative_name:
-        conclusion = (
-            "The game's authoritative DescriptorsCollection resolved the target item to "
-            f"the sprite asset {authoritative_name}."
-        )
-    elif established:
-        conclusion = (
-            "The known-good controls establish a serialized item→visual reference path. "
-            "Candidates below are ranked using that same topology."
-        )
-    else:
-        conclusion = (
-            "The known-good controls do NOT establish a common serialized item→visual PPtr path. "
-            "This indicates the association is probably created in managed code or another runtime content table. "
-            "The Assembly-CSharp symbol section identifies the likely rendering API to inspect next."
+    conclusion = (
+        f"Resolved {summary['resolved_count']} of {summary['component_count']} "
+        "ritual component icon(s) from descriptor sprites or curated exact aliases. "
+        f"{summary['runtime_placeholder_diagnostic_count']} item(s) expose only "
+        "the generic runtime placeholder diagnostically; placeholders are not applied."
+    )
+
+    component_rows = []
+    for item_id, entry in sorted(items.items(), key=lambda x: x[1].get("index", 10**9)):
+        icon = entry.get("icon", {})
+        source = entry.get("icon_source", "")
+        placeholder = entry.get("runtime_placeholder_icon", {})
+        decision = entry.get("placeholder_decision", {})
+        sprite_name = icon.get("asset_name", "")
+        if not sprite_name and placeholder:
+            sprite_name = f"unmapped placeholder: {placeholder.get('asset_name', '')}"
+        component_rows.append(
+            "<tr>"
+            f"<td>{html.escape(str(entry.get('index', '')))}</td>"
+            f"<td><code>{html.escape(item_id)}</code></td>"
+            f"<td><code>{html.escape(sprite_name)}</code></td>"
+            f"<td>{html.escape(source)}</td>"
+            f"<td>{html.escape(icon.get('file', ''))}</td>"
+            f"<td>{html.escape(str(icon.get('path_id', '')))}</td>"
+            f"<td>{html.escape(str(decision.get('InventoryWidthSize', '')))}</td>"
+            "</tr>"
         )
 
+    unresolved_rows = []
+    for item_id, entry in sorted(unresolved_items.items(), key=lambda x: x[1].get("index", 10**9)):
+        unresolved_rows.append(
+            "<tr>"
+            f"<td>{html.escape(str(entry.get('index', '')))}</td>"
+            f"<td><code>{html.escape(item_id)}</code></td>"
+            f"<td>{html.escape(entry.get('error', ''))}</td>"
+            "</tr>"
+        )
+    if not unresolved_rows:
+        unresolved_rows.append("<tr><td colspan='3'>None</td></tr>")
+
     page = f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>Quasimorph Sprite Mapping Investigator</title>
+<html><head><meta charset="utf-8"><title>Quasimorph Component Sprite Export</title>
 <style>
 body{{font-family:Segoe UI,Arial,sans-serif;margin:24px;max-width:1200px}}
 code{{background:#eee;padding:2px 4px}}
@@ -1373,37 +1269,28 @@ table{{border-collapse:collapse;width:100%;margin:12px 0 24px}}
 td,th{{border:1px solid #bbb;padding:6px;text-align:left}}
 .ok{{padding:10px;background:#eef6ee;border-left:4px solid #538653}}
 </style></head><body>
-<h1>Quasimorph Sprite Mapping Investigator</h1>
+<h1>Quasimorph Component Sprite Export</h1>
 <p class="ok">{html.escape(conclusion)}</p>
 
-<h2>Known-good controls</h2>
-<table><tr><th>Item ID</th><th>Known sprite</th><th>Item-text objects</th>
-<th>Sprite objects</th><th>Confirmed item→sprite chains</th></tr>
-{''.join(control_rows)}</table>
-
-<h2>Target: <code>{TARGET_ITEM_ID}</code></h2>
-<p>Serialized objects containing target ID: {len(target.get('item_text_objects', []))}</p>
-<p>Visual chains reachable from target: {len(target.get('item_to_visual_chains', []))}</p>
-<p>Authoritative descriptor index: {html.escape(str(authoritative_target.get('index', 'not resolved')))}</p>
-<p>Authoritative icon: <code>{html.escape(authoritative_name or 'not resolved')}</code></p>
-<p>Icon source: <code>{html.escape(authoritative_source or 'not resolved')}</code></p>
-<p>Inventory width: {html.escape(str(placeholder_decision.get('InventoryWidthSize', item_record.get('InventoryWidthSize', ''))))}</p>
-<p>Config row: section <code>{html.escape(item_record.get('section', ''))}</code>, line {html.escape(str(item_record.get('line_number', '')))}</p>
-<p>Icon location: {html.escape(authoritative_icon.get('file', ''))} · Path ID {html.escape(str(authoritative_icon.get('path_id', '')))}</p>
+<h2>Summary</h2>
+<p>Resolved icons: {summary['resolved_count']} / {summary['component_count']}</p>
+<p>Descriptor icons: {summary['descriptor_icon_count']}</p>
+<p>Exact aliases applied: {summary['exact_alias_count']}</p>
+<p>Runtime placeholders left unmapped: {summary['runtime_placeholder_diagnostic_count']}</p>
 <p>Managed descriptor scan: {attempted_trees} attempted, {decoded_trees} decoded,
 {manual_trees} by deterministic fallback,
 {descriptor_classes} <code>MGSC.DescriptorsCollection</code> object(s),
 {item_factory_objects} <code>MGSC.ItemFactory</code> object(s),
 {len(descriptor_scan.get('descriptor_array_candidates', []))} parallel-array collection(s) inspected.</p>
 
-<h3>Ranked visual candidates</h3>
-<table><tr><th>Asset</th><th>Score</th><th>Evidence chains</th></tr>
-{''.join(candidate_rows)}</table>
+<h2>Component Icons</h2>
+<table><tr><th>#</th><th>Item ID</th><th>Sprite</th><th>Source</th>
+<th>Asset</th><th>Path ID</th><th>Width</th></tr>
+{''.join(component_rows)}</table>
 
-<h2>Assembly-CSharp rendering symbols</h2>
-<p>The managed assembly contains the following relevant symbols:</p>
-<ul>{''.join(assembly_hits) or '<li>No requested symbols found.</li>'}</ul>
-<p>Full offsets and nearby string context are in <code>sprite_mapping_investigation.json</code>.</p>
+<h2>Unresolved</h2>
+<table><tr><th>#</th><th>Item ID</th><th>Reason</th></tr>
+{''.join(unresolved_rows)}</table>
 </body></html>"""
     html_path = out / "index.html"
     html_path.write_text(page, encoding="utf-8")
@@ -1411,15 +1298,26 @@ td,th{{border:1px solid #bbb;padding:6px;text-align:left}}
     authoritative_mapping = {
         item_id: entry["image"]
         for item_id, entry in report["authoritative_descriptor_resolution"]["items"].items()
+        if (
+            entry.get("image")
+            and entry.get("icon_source") == "ItemContentDescriptor._icon"
+        )
+    }
+    manual_alias_mapping = {
+        item_id: entry["image"]
+        for item_id, entry in exact_alias_items.items()
         if entry.get("image")
     }
-    top_candidate = authoritative_name or (ranked[0]["asset_name"] if ranked else "")
+    authoritative_target = descriptor_scan["items"].get(TARGET_ITEM_ID, {})
+    target_icon = authoritative_target.get("icon", {})
     return {
         "json": str(json_path),
         "index_html": str(html_path),
-        "controls_establish_serialized_mapping": established,
-        "candidate_count": 1 if authoritative_name else len(ranked),
-        "top_candidate": top_candidate,
+        "resolved_count": len(authoritative_mapping) + len(manual_alias_mapping),
+        "component_count": len(items),
+        "runtime_placeholder_count": fallback_count,
+        "top_candidate": target_icon.get("asset_name", ""),
         "authoritative_target": authoritative_target,
         "authoritative_mapping": authoritative_mapping,
+        "manual_alias_mapping": manual_alias_mapping,
     }
