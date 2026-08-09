@@ -1,6 +1,6 @@
 # Quasimorph Ritual Optimizer v0.7.0
 
-v0.7 defaults to distinct components, uses NumPy batch evaluation, imports ritual Price, and displays total ritual Cost. Repeated components remain available as an advanced option.
+v0.8 keeps component matching tied to confirmed in-game sprite names, uses NumPy batch evaluation, and reads the player's save automatically. Repeated components remain available as an advanced option.
 
 # Quasimorph Ritual Optimizer
 

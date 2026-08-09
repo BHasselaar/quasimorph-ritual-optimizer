@@ -168,12 +168,12 @@ class RitualOptimizerApp(tk.Tk):
         ttk.Button(sb,text="Clear",command=lambda:self.inventory_search_var.set("")).pack(side=tk.LEFT,padx=5); self.inventory_search_var.trace_add("write",lambda *_:self._refresh_inventory())
 
         box=ttk.Frame(inv); box.pack(fill=tk.BOTH,expand=True,padx=6,pady=(0,6)); box.rowconfigure(0,weight=1); box.columnconfigure(0,weight=1)
-        cols=("enabled","name","quantity","essence","power","stability","price")
+        cols=("enabled","name","quantity","essence","power","stability")
         style=ttk.Style(); style.configure("Inventory.Treeview",rowheight=68)
         self.inventory_tree=ttk.Treeview(box,columns=cols,show="tree headings",selectmode="browse",style="Inventory.Treeview")
         self.inventory_tree.heading("#0",text="Icon"); self.inventory_tree.column("#0",width=72,minwidth=72,stretch=False,anchor=tk.CENTER)
-        self._inventory_headings={"enabled":"Available","name":"Name","quantity":"Qty","essence":"Essence","power":"Power","stability":"Stability","price":"Price"}
-        widths={"enabled":72,"name":205,"quantity":50,"essence":82,"power":65,"stability":72,"price":70}
+        self._inventory_headings={"enabled":"Available","name":"Name","quantity":"Qty","essence":"Essence","power":"Power","stability":"Stability"}
+        widths={"enabled":72,"name":205,"quantity":50,"essence":82,"power":65,"stability":72}
         for c in cols:
             self.inventory_tree.heading(c,text=self._inventory_headings[c],command=lambda x=c:self._sort_inventory(x)); self.inventory_tree.column(c,width=widths[c],anchor=tk.W if c=="name" else tk.CENTER)
         vs=ttk.Scrollbar(box,orient=tk.VERTICAL,command=self.inventory_tree.yview); hs=ttk.Scrollbar(box,orient=tk.HORIZONTAL,command=self.inventory_tree.xview)
@@ -202,9 +202,9 @@ class RitualOptimizerApp(tk.Tk):
         self.progress=ttk.Progressbar(act,mode="determinate",maximum=100); self.progress.pack(side=tk.LEFT,fill=tk.X,expand=True,padx=10); self.status_var=tk.StringVar(value="Ready"); ttk.Label(act,textvariable=self.status_var).pack(side=tk.RIGHT)
 
         rb=ttk.Frame(opt); rb.pack(fill=tk.BOTH,expand=True,padx=6); rb.rowconfigure(0,weight=1); rb.columnconfigure(0,weight=1)
-        rcols=("rank","cost","power","stability","power_pct","stability_pct","jackpot","upgrade","sidegrade","downgrade","disenchant","order")
-        self.result_tree=ttk.Treeview(rb,columns=rcols,show="headings",selectmode="browse"); self._result_headings={"rank":"#","cost":"Cost","power":"Power","stability":"Stability","power_pct":"Power %","stability_pct":"Stability %","jackpot":"Jackpot","upgrade":"Upgrade","sidegrade":"Sidegrade","downgrade":"Downgrade","disenchant":"Disenchant","order":"Clockwise order"}
-        widths={"rank":42,"cost":70,"power":70,"stability":72,"power_pct":72,"stability_pct":78,"jackpot":68,"upgrade":68,"sidegrade":72,"downgrade":76,"disenchant":80,"order":500}
+        rcols=("rank","power","stability","power_pct","stability_pct","jackpot","upgrade","sidegrade","downgrade","disenchant","order")
+        self.result_tree=ttk.Treeview(rb,columns=rcols,show="headings",selectmode="browse"); self._result_headings={"rank":"#","power":"Power","stability":"Stability","power_pct":"Power %","stability_pct":"Stability %","jackpot":"Jackpot","upgrade":"Upgrade","sidegrade":"Sidegrade","downgrade":"Downgrade","disenchant":"Disenchant","order":"Clockwise order"}
+        widths={"rank":42,"power":70,"stability":72,"power_pct":72,"stability_pct":78,"jackpot":68,"upgrade":68,"sidegrade":72,"downgrade":76,"disenchant":80,"order":500}
         for c in rcols: self.result_tree.heading(c,text=self._result_headings[c],command=lambda x=c:self._sort_results(x)); self.result_tree.column(c,width=widths[c],anchor=tk.W if c=="order" else tk.CENTER)
         rvs=ttk.Scrollbar(rb,orient=tk.VERTICAL,command=self.result_tree.yview); rhs=ttk.Scrollbar(rb,orient=tk.HORIZONTAL,command=self.result_tree.xview); self.result_tree.configure(yscrollcommand=rvs.set,xscrollcommand=rhs.set); self.result_tree.grid(row=0,column=0,sticky="nsew"); rvs.grid(row=0,column=1,sticky="ns"); rhs.grid(row=1,column=0,sticky="ew"); self.result_tree.bind("<<TreeviewSelect>>",self._show_result_details)
 
@@ -233,13 +233,13 @@ class RitualOptimizerApp(tk.Tk):
         if self._inventory_sort_column:
             c=self._inventory_sort_column
             def key(i):
-                x=self.items[i]; return {"enabled":x.enabled,"name":x.name.casefold(),"quantity":x.quantity,"essence":x.essence,"power":x.power,"stability":x.stability,"price":x.price}[c]
+                x=self.items[i]; return {"enabled":x.enabled,"name":x.name.casefold(),"quantity":x.quantity,"essence":x.essence,"power":x.power,"stability":x.stability}[c]
             indices.sort(key=key,reverse=self._inventory_sort_reverse)
         for idx in indices:
             x=self.items[idx]
             if query and query not in x.name.casefold() and query not in x.internal_id.casefold(): continue
             available=x.enabled and x.quantity>0
-            row_kwargs={"iid":str(idx),"values":("☑" if x.enabled else "☐",x.name,x.quantity,x.essence,f"{x.power:g}",f"{x.stability:g}",f"{x.price:g}"),"tags":("available" if available else "unavailable",)}
+            row_kwargs={"iid":str(idx),"values":("☑" if x.enabled else "☐",x.name,x.quantity,x.essence,f"{x.power:g}",f"{x.stability:g}"),"tags":("available" if available else "unavailable",)}
             photo=self._photo(x.sprite_path)
             if photo is not None: row_kwargs["image"]=photo
             self.inventory_tree.insert("",tk.END,**row_kwargs)
@@ -408,18 +408,18 @@ class RitualOptimizerApp(tk.Tk):
     def _render_results(self):
         self.result_tree.delete(*self.result_tree.get_children())
         for row,r in enumerate(self.results):
-            p=r.probabilities;self.result_tree.insert("",tk.END,iid=str(row),values=(self._result_original_rank.get(id(r),row+1),f"{r.total_price:.0f}",f"{r.total_power:.2f}",f"{r.total_stability:.2f}",f"{r.power_percent:.2%}",f"{r.stability_percent:.2%}",f"{p.jackpot:.2%}",f"{p.upgrade:.2%}",f"{p.sidegrade:.2%}",f"{p.downgrade:.2%}",f"{p.disenchant:.2%}",r.order_text))
+            p=r.probabilities;self.result_tree.insert("",tk.END,iid=str(row),values=(self._result_original_rank.get(id(r),row+1),f"{r.total_power:.2f}",f"{r.total_stability:.2f}",f"{r.power_percent:.2%}",f"{r.stability_percent:.2%}",f"{p.jackpot:.2%}",f"{p.upgrade:.2%}",f"{p.sidegrade:.2%}",f"{p.downgrade:.2%}",f"{p.disenchant:.2%}",r.order_text))
     def _sort_results(self,column):
         if not self.results:return
         if self._result_sort_column==column:self._result_sort_reverse=not self._result_sort_reverse
         else:self._result_sort_column=column;self._result_sort_reverse=column not in {"rank","order"}
         def val(r):
-            p=r.probabilities;return {"rank":self._result_original_rank.get(id(r),10**9),"cost":r.total_price,"power":r.total_power,"stability":r.total_stability,"power_pct":r.power_percent,"stability_pct":r.stability_percent,"jackpot":p.jackpot,"upgrade":p.upgrade,"sidegrade":p.sidegrade,"downgrade":p.downgrade,"disenchant":p.disenchant,"order":r.order_text.casefold()}[column]
+            p=r.probabilities;return {"rank":self._result_original_rank.get(id(r),10**9),"power":r.total_power,"stability":r.total_stability,"power_pct":r.power_percent,"stability_pct":r.stability_percent,"jackpot":p.jackpot,"upgrade":p.upgrade,"sidegrade":p.sidegrade,"downgrade":p.downgrade,"disenchant":p.disenchant,"order":r.order_text.casefold()}[column]
         self.results.sort(key=val,reverse=self._result_sort_reverse);self._render_results()
     def _show_result_details(self,_event=None):
         sel=self.result_tree.selection();
         if not sel:return
-        r=self.results[int(sel[0])];p=r.probabilities;lines=[f"Clockwise order: {r.order_text}",f"Material cost: {r.total_price:g}",f"Ship bonuses: Power +{r.flat_power_bonus:g}, Stability +{r.flat_stability_bonus:g}",f"Total: Power {r.total_power:.4f}, Stability {r.total_stability:.4f}",f"Targets: Power {r.power_target:.4f}, Stability {r.stability_target:.4f}",f"Effective: Power {r.power_percent:.4%}, Stability {r.stability_percent:.4%}",f"Outcomes: Jackpot {p.jackpot:.4%}, Upgrade {p.upgrade:.4%}, Sidegrade {p.sidegrade:.4%}, Downgrade {p.downgrade:.4%}, Disenchant {p.disenchant:.4%}","","Per-component contributions:"]
+        r=self.results[int(sel[0])];p=r.probabilities;lines=[f"Clockwise order: {r.order_text}",f"Ship bonuses: Power +{r.flat_power_bonus:g}, Stability +{r.flat_stability_bonus:g}",f"Total: Power {r.total_power:.4f}, Stability {r.total_stability:.4f}",f"Targets: Power {r.power_target:.4f}, Stability {r.stability_target:.4f}",f"Effective: Power {r.power_percent:.4%}, Stability {r.stability_percent:.4%}",f"Outcomes: Jackpot {p.jackpot:.4%}, Upgrade {p.upgrade:.4%}, Sidegrade {p.sidegrade:.4%}, Downgrade {p.downgrade:.4%}, Disenchant {p.disenchant:.4%}","","Per-component contributions:"]
         for i,c in enumerate(r.contributions,1):lines.append(f"{i}. {c.item.name} [{c.item.essence}] — predecessor {c.predecessor.name}; Power {c.item.power:g} × {c.predecessor_power_multiplier:g} × {c.center_power_multiplier:g} = {c.power:.4f}; Stability {c.item.stability:g} × {c.predecessor_stability_multiplier:g} × {c.center_stability_multiplier:g} = {c.stability:.4f}")
         self.details_text.configure(state=tk.NORMAL);self.details_text.delete("1.0",tk.END);self.details_text.insert("1.0","\n".join(lines));self.details_text.configure(state=tk.DISABLED);self._draw_ritual(r)
     def _draw_ritual(self,r):
@@ -441,8 +441,8 @@ class RitualOptimizerApp(tk.Tk):
         f=filedialog.asksaveasfilename(defaultextension=".csv",filetypes=[("CSV","*.csv")]);
         if not f:return
         with Path(f).open("w",encoding="utf-8",newline="") as h:
-            w=csv.writer(h);w.writerow(["rank","order","cost","power","stability","power_percent","stability_percent","jackpot","upgrade","sidegrade","downgrade","disenchant"])
-            for i,r in enumerate(self.results,1):p=r.probabilities;w.writerow([i,r.order_text,r.total_price,r.total_power,r.total_stability,r.power_percent,r.stability_percent,p.jackpot,p.upgrade,p.sidegrade,p.downgrade,p.disenchant])
+            w=csv.writer(h);w.writerow(["rank","order","power","stability","power_percent","stability_percent","jackpot","upgrade","sidegrade","downgrade","disenchant"])
+            for i,r in enumerate(self.results,1):p=r.probabilities;w.writerow([i,r.order_text,r.total_power,r.total_stability,r.power_percent,r.stability_percent,p.jackpot,p.upgrade,p.sidegrade,p.downgrade,p.disenchant])
     def _on_close(self):self._settings_changed();self.cancel_event.set();self.destroy()
 
 

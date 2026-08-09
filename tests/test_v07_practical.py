@@ -7,7 +7,7 @@ from quasimorph_optimizer.sprites import _candidate_score
 
 def items7():
     ess = ["eon", "gavvakh", "shavva", "siaira", "agga", "eon", "gavvakh"]
-    return [Item(f"Item {i}", e, 60+i*9, 10+(i*4)%18, True, f"item_{i}", 3, price=100+i) for i,e in enumerate(ess)]
+    return [Item(f"Item {i}", e, 60+i*9, 10+(i*4)%18, True, f"item_{i}", 3) for i,e in enumerate(ess)]
 
 
 def test_distinct_default_ignores_extra_owned_copies_for_search_size():
@@ -32,10 +32,7 @@ def test_numpy_distinct_backend_matches_small_exhaustive_reference():
     assert summary.backend == "numpy-batch"
 
 
-def test_price_and_sprite_matching_helpers():
-    order=tuple(items7()[:5])
-    result=evaluate_ritual(order,center_essence="gavvakh",tier=1)
-    assert result.total_price == sum(x.price for x in order)
+def test_sprite_matching_helpers():
     spider=Item("Spider Joint","agga",80,25,True,"spider_joint")
     assert _candidate_score(spider,"spiderJoint_icon","Sprite") >= 150
     assert _candidate_score(spider,"random_rifle_inv","Sprite") < 150

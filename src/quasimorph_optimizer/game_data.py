@@ -432,15 +432,9 @@ def parse_resources_assets(path: Path) -> GameDatabase:
             continue
 
         max_stack = 1
-        price = 0.0
         try:
             if row.get("MaxStack"):
                 max_stack = max(1, int(float(row["MaxStack"])))
-        except ValueError:
-            pass
-        try:
-            if row.get("Price"):
-                price = max(0.0, float(row["Price"]))
         except ValueError:
             pass
 
@@ -458,7 +452,6 @@ def parse_resources_assets(path: Path) -> GameDatabase:
                 internal_id=item_id,
                 quantity=1,
                 max_stack=max_stack,
-                price=price,
             )
         )
 
@@ -520,7 +513,6 @@ def save_game_database(db: GameDatabase, path: Path | None = None) -> None:
                 "essence": i.essence,
                 "power": i.power,
                 "stability": i.stability,
-                "price": i.price,
                 "max_stack": i.max_stack,
             }
             for i in db.items
@@ -558,7 +550,6 @@ def load_cached_game_database(path: Path | None = None) -> GameDatabase | None:
                 enabled=True,
                 quantity=1,
                 max_stack=int(x.get("max_stack", 1)),
-                price=float(x.get("price", 0)),
             )
             for x in data["items"]
         )
