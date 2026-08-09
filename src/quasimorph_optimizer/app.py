@@ -18,7 +18,8 @@ from .models import Item, RitualResult
 from .optimizer import OBJECTIVES, OptimizationSummary, optimize_parallel, ritual_order_count
 from .save_sync import find_session_saves, read_save
 from .settings import AppSettings, load_settings, save_settings, user_data_dir
-from .sprites import extract_component_sprites, sprite_cache_dir, sprite_report_path, export_unresolved_candidate_sheets, export_all_inv_sprite_atlas, trace_quasiplumbum_references
+from .sprites import extract_component_sprites, sprite_cache_dir, sprite_report_path
+from .sprite_investigator import investigate_item_sprite_mapping
 from .version import __version__
 
 
@@ -70,9 +71,7 @@ class RitualOptimizerApp(tk.Tk):
         ttk.Button(sync,text="Choose game folder",command=self._choose_game).pack(side=tk.LEFT,padx=4)
         ttk.Button(sync,text="Choose save",command=self._choose_save).pack(side=tk.LEFT,padx=4)
         ttk.Button(sync,text="Extract ritual sprites",command=self._start_sprite_extract).pack(side=tk.LEFT,padx=4)
-        ttk.Button(sync,text="Export unresolved sprite candidates",command=self._export_sprite_candidates).pack(side=tk.LEFT,padx=4)
-        ttk.Button(sync,text="Export all _inv sprite atlas",command=self._export_inv_atlas).pack(side=tk.LEFT,padx=4)
-        ttk.Button(sync,text="Trace Quasiplumbum sprite reference",command=self._trace_quasiplumbum).pack(side=tk.LEFT,padx=4)
+        ttk.Button(sync,text="Investigate item→sprite mapping",command=self._investigate_sprite_mapping).pack(side=tk.LEFT,padx=4)
         self.sync_status=tk.StringVar(value="Manual mode")
         ttk.Label(sync,textvariable=self.sync_status).pack(side=tk.RIGHT,padx=8)
 
@@ -268,38 +267,7 @@ class RitualOptimizerApp(tk.Tk):
                 +(f" · localization: {loc_diag.name}" if loc_diag.exists() else "")
             )
         except Exception as exc:messagebox.showerror("Game sync failed",str(exc));self.sync_status.set("Sync failed")
-    def _trace_quasiplumbum(self):
-        game=detect_game_path(self.settings.game_path)
-        if not game:
-            messagebox.showerror("Game not found","Choose or sync the Quasimorph game folder first.")
-            return
-
-        self.sync_status.set("Tracing moon_armor_plates references…")
-
-        def work():
-            try:
-                result=trace_quasiplumbum_references(game)
-                self.worker_queue.put(("quasiplumbum_trace_done",result))
-            except Exception as exc:
-                self.worker_queue.put(("quasiplumbum_trace_error",exc))
-
-        threading.Thread(target=work,daemon=True).start()
-
-    def _export_inv_atlas(self):
-        game=detect_game_path(self.settings.game_path)
-        if not game:
-            messagebox.showerror("Game not found","Choose or sync the Quasimorph game folder first.")
-            return
-        self.sync_status.set("Exporting every *_inv Texture2D…")
-        def work():
-            try:
-                result=export_all_inv_sprite_atlas, trace_quasiplumbum_references(game)
-                self.worker_queue.put(("inv_atlas_done",result))
-            except Exception as exc:
-                self.worker_queue.put(("inv_atlas_error",exc))
-        threading.Thread(target=work,daemon=True).start()
-
-    def _export_sprite_candidates(self):
+    def _investigate_sprite_mapping(self):
         game=detect_game_path(self.settings.game_path)
         if not game:
             messagebox.showerror(
@@ -308,17 +276,14 @@ class RitualOptimizerApp(tk.Tk):
             )
             return
 
-        self.sync_status.set("Exporting unresolved sprite candidate sheets…")
+        self.sync_status.set("Investigating item→sprite mapping…")
 
         def work():
             try:
-                outputs=export_unresolved_candidate_sheets, export_all_inv_sprite_atlas, trace_quasiplumbum_references(
-                    game,
-                    [x for x in self.items if x.internal_id],
-                )
-                self.worker_queue.put(("sprite_candidates_done",outputs))
+                result=investigate_item_sprite_mapping(game)
+                self.worker_queue.put(("sprite_investigation_done",result))
             except Exception as exc:
-                self.worker_queue.put(("sprite_candidates_error",exc))
+                self.worker_queue.put(("sprite_investigation_error",exc))
 
         threading.Thread(target=work,daemon=True).start()
 
@@ -353,37 +318,22 @@ class RitualOptimizerApp(tk.Tk):
                 if kind=="progress":d,t=payload;self.progress.configure(value=d/t*100 if t else 0);self.status_var.set(f"Evaluated {d:,} / {t:,}")
                 elif kind=="done":self._finish_optimization(payload)
                 elif kind=="error":self._reset_worker_buttons();messagebox.showerror("Optimization failed",str(payload));self.status_var.set("Failed")
-                elif kind=="quasiplumbum_trace_done":
+                elif kind=="sprite_investigation_done":
                     info=payload
-                    self.sync_status.set(
-                        f"Quasiplumbum trace: {info.get('match_count',0)} object matches · "
-                        f"{info.get('resolved_visual_count',0)} visuals"
-                    )
-                    try:
-                        os.startfile(info["index_html"])
-                    except Exception:
-                        pass
-                elif kind=="quasiplumbum_trace_error":
-                    messagebox.showerror("Quasiplumbum trace failed",str(payload))
-                    self.sync_status.set("Quasiplumbum trace failed")
-                elif kind=="inv_atlas_done":
-                    info=payload
-                    self.sync_status.set(
-                        f"_inv atlas: {info.get('pngs_extracted',0)} PNGs · {Path(info['index_html']).name}"
-                    )
-                    try:
-                        os.startfile(info["index_html"])
-                    except Exception:
-                        pass
-                elif kind=="inv_atlas_error":
-                    messagebox.showerror("_inv atlas export failed",str(payload))
-                    self.sync_status.set("_inv atlas export failed")
-                elif kind=="sprite_candidates_done":
-                    outputs=payload
-                    if outputs:
-                        self.sync_status.set("Candidate sheets: " + " | ".join(Path(p).name for p in outputs.values()))
+                    top=info.get("top_candidate","")
+                    if info.get("controls_establish_serialized_mapping"):
+                        msg=f"Sprite mapping investigated · {info.get('candidate_count',0)} target candidates"
+                        if top: msg+=f" · top: {top}"
                     else:
-                        self.sync_status.set("No unresolved candidate sheets were generated")
+                        msg="Sprite mapping investigated · association appears runtime/code-driven"
+                    self.sync_status.set(msg)
+                    try:
+                        os.startfile(info["index_html"])
+                    except Exception:
+                        pass
+                elif kind=="sprite_investigation_error":
+                    messagebox.showerror("Sprite mapping investigation failed",str(payload))
+                    self.sync_status.set("Sprite mapping investigation failed")
                 elif kind=="sprites_done":
                     mapping=payload
                     self.items=[replace(x,sprite_path=mapping.get(x.internal_id,x.sprite_path)) for x in self.items]
@@ -392,7 +342,6 @@ class RitualOptimizerApp(tk.Tk):
                     self._refresh_inventory()
                     report_path=sprite_report_path()
                     self.sync_status.set(f"Extracted {len(mapping)} ritual sprites · report: {report_path.name}")
-                elif kind=="sprite_candidates_error":messagebox.showerror("Candidate sheet export failed",str(payload));self.sync_status.set("Candidate sheet export failed")
                 elif kind=="sprites_error":messagebox.showerror("Sprite extraction failed",str(payload));self.sync_status.set("Sprite extraction failed")
         except queue.Empty:pass
         self.after(100,self._poll_worker)
