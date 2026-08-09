@@ -12,6 +12,11 @@ class Item:
     power: float
     stability: float
     enabled: bool = True
+    internal_id: str = ""
+    quantity: int = 1
+    max_stack: int = 1
+    sprite_path: str = ""
+    price: float = 0.0
 
     def __post_init__(self) -> None:
         normalized = self.essence.strip().lower()
@@ -19,10 +24,16 @@ class Item:
             raise ValueError(f"Unknown essence: {self.essence!r}")
         if not self.name.strip():
             raise ValueError("Item name cannot be empty")
-        if self.power < 0 or self.stability < 0:
-            raise ValueError("Power and stability must be non-negative")
+        if self.power < 0 or self.stability < 0 or self.price < 0:
+            raise ValueError("Power, stability, and price must be non-negative")
+        if int(self.quantity) < 0:
+            raise ValueError("Quantity must be non-negative")
         object.__setattr__(self, "essence", normalized)
         object.__setattr__(self, "name", self.name.strip())
+        object.__setattr__(self, "internal_id", self.internal_id.strip())
+        object.__setattr__(self, "quantity", int(self.quantity))
+        object.__setattr__(self, "max_stack", max(1, int(self.max_stack)))
+        object.__setattr__(self, "price", float(self.price))
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,3 +78,7 @@ class RitualResult:
     @property
     def order_text(self) -> str:
         return " → ".join(item.name for item in self.order)
+
+    @property
+    def total_price(self) -> float:
+        return sum(item.price for item in self.order)

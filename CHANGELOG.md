@@ -1,4 +1,22 @@
+## 0.7.0
+
+- NumPy batch evaluator for distinct-component searches.
+- Distinct components are the default; repeats are opt-in.
+- Imported ritual price and per-result material cost.
+- Broader safe sprite matching using Sprite + Texture2D.
+- Includes v0.6.1/v0.6.2 startup/sync fixes.
+
 # Changelog
+
+## 0.6.0
+
+- Added read-only game database import from `resources.assets`.
+- Added save-file quantity synchronization and automatic Morph Analysis ritual bonuses.
+- Added exact quantity-aware repeated-component brute force.
+- Added local UnityPy sprite extraction/cache and graphical ritual preview.
+- Added internal game IDs and quantities to inventory records.
+- Added dynamic tier/affinity/Jackpot-cap rules from the installed game.
+- Added integration regression tests.
 
 ## 0.5.0
 

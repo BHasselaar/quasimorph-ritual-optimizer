@@ -1,78 +1,45 @@
 from __future__ import annotations
 
-from .constants import JACKPOT_UPGRADE_CAP, TIER_RULES
+from .constants import JACKPOT_UPGRADE_CAP, TIER_RULES, TierRules
 from .models import Probabilities
 
 
-def calculate_base_probabilities(
-    power_percent: float,
-    stability_percent: float,
-    tier: int,
+def calculate_probabilities(
+    power_percent: float, stability_percent: float, tier: int, *,
+    jackpot_cap: float = JACKPOT_UPGRADE_CAP, tier_rules: dict[int, TierRules] | None = None,
 ) -> Probabilities:
-    """Calculate the documented four in-game outcome categories.
-
-    Jackpot is returned as zero here. The Upgrade field contains the entire raw
-    improvement probability before the experimental Jackpot split.
-    """
-    if tier not in TIER_RULES:
-        raise ValueError(f"Tier must be one of {tuple(TIER_RULES)}")
-
+    rules = tier_rules or TIER_RULES
+    if tier not in rules:
+        raise ValueError(f"Tier must be one of {tuple(rules)}")
     p = min(1.0, max(0.0, float(power_percent)))
     s = min(1.0, max(0.0, float(stability_percent)))
-    coef = TIER_RULES[tier].sidegrade_coef
+    coef = rules[tier].sidegrade_coef
 
-    upgrade_raw = p * s
-    sidegrade_raw = p * (1.0 - s) * (1.0 / coef)
-    downgrade_raw = (1.0 - p) * s
-    disenchant_raw = (1.0 - s) * (
-        p * (1.0 - 1.0 / coef) + (1.0 - p)
-    )
+    raw_upgrade = p * s
+    jackpot = max(0.0, raw_upgrade - jackpot_cap) if tier < max(rules) else 0.0
+    upgrade = min(raw_upgrade, jackpot_cap) if tier < max(rules) else raw_upgrade
+    sidegrade = p * (1.0 - s) * (1.0 / coef if coef > 0 else 1.0)
+    downgrade = (1.0 - p) * s
+    disenchant = (1.0 - s) * (p * (1.0 - (1.0 / coef if coef > 0 else 1.0)) + (1.0 - p))
+    if tier == min(rules):
+        disenchant += downgrade
+        downgrade = 0.0
 
-    if tier == 1:
-        disenchant_raw += downgrade_raw
-        downgrade_raw = 0.0
-
-    values = [
-        max(0.0, upgrade_raw),
-        max(0.0, sidegrade_raw),
-        max(0.0, downgrade_raw),
-        max(0.0, disenchant_raw),
-    ]
+    values = [max(0.0, jackpot), max(0.0, upgrade), max(0.0, sidegrade), max(0.0, downgrade), max(0.0, disenchant)]
     total = sum(values)
     if total <= 0.0:
         return Probabilities(0.0, 0.0, 0.0, 0.0, 1.0)
-
-    normalized = [value / total for value in values]
-    return Probabilities(
-        jackpot=0.0,
-        upgrade=normalized[0],
-        sidegrade=normalized[1],
-        downgrade=normalized[2],
-        disenchant=normalized[3],
-    )
+    return Probabilities(*(v / total for v in values))
 
 
-def calculate_probabilities(
-    power_percent: float,
-    stability_percent: float,
-    tier: int,
-    *,
-    jackpot_cap: float = JACKPOT_UPGRADE_CAP,
-) -> Probabilities:
-    """Calculate outcomes and apply the experimental Jackpot split.
-
-    The four-outcome calculation is supported by the supplied formulas and can
-    be compared directly with the in-game display. The separate Jackpot value
-    remains an unverified community assumption: raw Upgrade above
-    ``jackpot_cap`` is moved to Jackpot while normal Upgrade is capped.
-    """
-    base = calculate_base_probabilities(power_percent, stability_percent, tier)
-    jackpot = max(0.0, base.upgrade - jackpot_cap)
-    upgrade = min(base.upgrade, jackpot_cap)
-    return Probabilities(
-        jackpot=jackpot,
-        upgrade=upgrade,
-        sidegrade=base.sidegrade,
-        downgrade=base.downgrade,
-        disenchant=base.disenchant,
-    )
+def calculate_base_probabilities(power_percent: float, stability_percent: float, tier: int) -> Probabilities:
+    # Compatibility helper: return outcomes before moving Upgrade excess to Jackpot.
+    p = min(1.0, max(0.0, float(power_percent))); s = min(1.0, max(0.0, float(stability_percent)))
+    coef = TIER_RULES[tier].sidegrade_coef
+    upgrade = p * s
+    sidegrade = p * (1-s) / coef
+    downgrade = (1-p) * s
+    disenchant = (1-s) * (p*(1-1/coef)+(1-p))
+    if tier == 1: disenchant += downgrade; downgrade = 0.0
+    vals=[upgrade,sidegrade,downgrade,disenchant]; total=sum(vals)
+    return Probabilities(0.0, *(v/total for v in vals))

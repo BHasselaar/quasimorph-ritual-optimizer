@@ -7,6 +7,7 @@ py -3.12 -m PyInstaller --noconfirm --clean --onefile --windowed ^
   --name QuasimorphRitualOptimizer ^
   --paths src ^
   --add-data "src\quasimorph_optimizer\data\default_inventory.csv;quasimorph_optimizer\data" ^
+  --collect-all UnityPy ^
   desktop.py
 if errorlevel 1 exit /b 1
 echo.

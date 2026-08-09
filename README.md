@@ -1,63 +1,76 @@
+# Quasimorph Ritual Optimizer v0.7.0
+
+v0.7 defaults to distinct components, uses NumPy batch evaluation, imports ritual Price, and displays total ritual Cost. Repeated components remain available as an advanced option.
+
 # Quasimorph Ritual Optimizer
 
-A Windows desktop application that exhaustively searches five-component pact rituals in **Quasimorph** using the verified community affinity/probability model.
+A Windows desktop application for exhaustive pact-ritual optimization in **Quasimorph**.
 
-## v0.5.0
+Version 0.6 can operate as a read-only companion to an installed copy of the game: it imports the current ritual database from Unity assets, reads component quantities from the player's save, detects Morph Analysis ritual bonuses, and can locally extract the matching inventory sprites.
 
-- Search components by name with instant filtering.
-- Case-insensitive duplicate-name protection (`Spider Joint`, `SPIDER JOINT`, etc. are treated as the same name).
-- Click inventory headers to sort by availability, name, essence, Power, or Stability; clicking again reverses the order.
-- Click result headers to sort all retained results by any displayed metric or clockwise order.
-- Default objective is **Balanced**. Available objectives are Jackpot, Balanced, Sidegrade, and Minimum Disenchant.
-- Default retained result count is **10,000**.
-- Exact brute force now precomputes pairwise affinity contributions and scores candidates using compact numeric records. Full ritual breakdown objects are created only for retained results.
-- Parallel work uses low-overhead contiguous combination ranges, reducing process/task overhead while retaining exact exhaustive search.
-- Ship Power/Stability bonuses default to **0 / 0** and persist automatically.
-- Inventory availability colors, checkbox-style toggles, drag-and-drop ordering, and horizontal/vertical scrolling remain available.
+## v0.6 highlights
 
-## Run from source
+- Exact brute-force optimization for Jackpot, Balanced, Sidegrade, or Minimum Disenchant.
+- Multi-process CPU search; `Workers = 0` uses all logical CPUs.
+- Quantity-aware rituals. Five copies of one component can now legitimately produce a five-copy ritual if the save contains at least five.
+- Game database import from `Quasimorph_Data/resources.assets`:
+  - `#pactcomponents`
+  - `#pacttiers`
+  - `#essenceaffinity`
+  - `SkullRitualUpgradeChanceCap`
+- Save synchronization from `slot_*_session.dat`:
+  - ship cargo
+  - fridge storage
+  - recycling storage
+  - Morph Analysis Power/Stability upgrades
+- Local sprite extraction with UnityPy.
+- Graphical five-component ritual preview.
+- Searchable, sortable, draggable inventory with availability toggles and quantities.
+- Sortable result columns and 10,000 Top Results default.
 
-Requires Python 3.11 or newer.
+## Read-only game integration
 
-```powershell
-py -3 -m venv .venv
-.venv\Scripts\Activate.ps1
-python -m pip install -e .
-quasimorph-ritual-optimizer
-```
-
-Or run `run_app.bat`.
-
-## Windows executable
-
-```powershell
-build_windows.bat
-```
-
-The executable is written to `dist/QuasimorphRitualOptimizer.exe`. GitHub Actions also builds the executable for version tags.
-
-## Local data
-
-The app stores user files at:
+The application never modifies Quasimorph files. It only reads the installation and save, then writes its own cache to:
 
 ```text
 %APPDATA%\QuasimorphRitualOptimizer\
 ```
 
-- `inventory.csv` — item order, values, and availability.
-- `settings.json` — ship Power/Stability bonuses and worker count.
+Typical cached files include:
 
-The bundled inventory is copied on a fresh install. Existing local inventories are not automatically migrated or overwritten. Use **Load bundled** if you want to replace your local inventory with the version shipped in the app.
-
-CSV format:
-
-```csv
-enabled,name,essence,power,stability
-true,Load of Gold Bars,eon,110,25
-true,Spider Joint,agga,80,25
+```text
+game_database.json
+inventory.csv
+settings.json
+sprites\
 ```
 
-## Calculation model
+The extracted sprites remain on the local PC. They are not part of this repository or its releases.
+
+## Using game synchronization
+
+1. Launch the optimizer.
+2. Click **Sync game + latest save**.
+3. The app looks for the Quasimorph Steam installation and parses `resources.assets`.
+4. It selects the newest `slot_*_session.dat` unless a save was chosen manually.
+5. Ritual components not present in the save are shown unavailable; present components show their exact quantity.
+6. Morph Analysis ritual bonuses are filled automatically.
+7. Click **Extract ritual sprites** once to create the local icon cache.
+
+If automatic path detection fails, use **Choose game folder** or **Choose save**.
+
+## Exact quantity-aware search
+
+A component definition and a physical inventory quantity are separate concepts. If a save contains:
+
+```text
+Load of Gold Bars ×5
+Spider Joint ×2
+```
+
+the optimizer may use up to five Gold Bars and two Spider Joints in a ritual. Circular rotations are collapsed so each directed ritual ring is evaluated once.
+
+## Ritual calculation
 
 For each component:
 
@@ -66,53 +79,34 @@ Power contribution = base Power × predecessor→component Power multiplier × c
 Stability contribution = base Stability × predecessor→component Stability multiplier × component→center Stability multiplier
 ```
 
-After summing the five components:
+Ship bonuses are applied after component contributions are summed. Power and Stability are divided by the current tier targets and capped at 100%. The result probabilities and 70% Upgrade-to-Jackpot split follow the game records/code model verified during development.
 
-```text
-Total Power = component Power total + ship Power bonus
-Total Stability = component Stability total + ship Stability bonus
+When game synchronization is active, tier targets, affinity multipliers, and the Jackpot cap are taken from the installed game data rather than only from bundled constants.
+
+## Run from source
+
+Requires Python 3.11+.
+
+```powershell
+py -3 -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -e .
+quasimorph-ritual-optimizer
 ```
 
-Then:
+`UnityPy` is installed as a dependency for local sprite extraction.
 
-```text
-Power% = min(1, Total Power / tier Power target)
-Stability% = min(1, Total Stability / tier Stability target)
+## Build Windows executable
+
+```powershell
+build_windows.bat
 ```
 
-Outcome formulas:
+The executable is written to:
 
 ```text
-Upgrade    = Power% × Stability%
-Sidegrade  = Power% × (1 − Stability%) × (1 / SidegradeCoef)
-Downgrade  = (1 − Power%) × Stability%
-Disenchant = (1 − Stability%) × (Power% × (1 − 1/SidegradeCoef) + (1 − Power%))
+dist\QuasimorphRitualOptimizer.exe
 ```
-
-At Tier 1, Downgrade is transferred to Disenchant. Raw Upgrade above 70% becomes Jackpot:
-
-```text
-Jackpot = max(0, raw Upgrade − 70%)
-Upgrade = min(raw Upgrade, 70%)
-```
-
-The five outer items form a directed circular ring. Rotations are equivalent; mirror-image orders are not.
-
-## Search size and parallelism
-
-The optimizer evaluates:
-
-```text
-C(number of available items, 5) × 4!
-```
-
-The v0.4 bundled list contains 38 components, 37 of which are initially available, producing **10,461,528** unique ring orders if left unchanged. Availability checkboxes are therefore useful both for modeling your actual inventory and reducing computation.
-
-The optimizer uses `ProcessPoolExecutor` because this search is CPU-bound and Python threads would remain constrained by the GIL. On a 12-thread CPU, leave **Workers** at `0` to use the detected 12 logical CPUs, or set the number manually.
-
-## Future graphical ritual view
-
-The current data model keeps item identity and clockwise order separate from the UI, so component artwork and a graphical five-slot ritual representation can be added later without changing the optimizer mathematics.
 
 ## Development
 
@@ -121,9 +115,9 @@ python -m pip install -e . -r requirements-dev.txt
 pytest
 ```
 
-## Disclaimer
+## Copyright note
 
-This is an unofficial community project. Game mechanics may change. Verify valuable or rare-item rituals in game before committing them.
+Quasimorph artwork is not distributed with this project. Sprite extraction operates locally against a user's installed game and stores the resulting cache locally.
 
 ## License
 

@@ -7,7 +7,7 @@ from pathlib import Path
 from .models import Item
 from .settings import user_data_dir
 
-CSV_FIELDS = ("enabled", "name", "essence", "power", "stability")
+CSV_FIELDS = ("enabled", "name", "internal_id", "quantity", "essence", "power", "stability", "price", "max_stack", "sprite_path")
 
 
 def normalized_item_name(name: str) -> str:
@@ -48,13 +48,14 @@ def load_inventory(path: Path) -> list[Item]:
                 item = Item(
                     name=row["name"], essence=row["essence"], power=float(row["power"]),
                     stability=float(row["stability"]), enabled=_parse_enabled(row.get("enabled", "true")),
+                    internal_id=row.get("internal_id", ""), quantity=int(float(row.get("quantity", "1") or 1)),
+                    max_stack=int(float(row.get("max_stack", "1") or 1)), sprite_path=row.get("sprite_path", ""),
+                    price=float(row.get("price", "0") or 0),
                 )
                 key = normalized_item_name(item.name)
                 if key in names:
                     previous, previous_line = names[key]
-                    raise ValueError(
-                        f"duplicate component name {item.name!r}; it conflicts with {previous!r} on line {previous_line}"
-                    )
+                    raise ValueError(f"duplicate component name {item.name!r}; conflicts with {previous!r} on line {previous_line}")
                 names[key] = (item.name, line_number)
                 items.append(item)
             except (TypeError, ValueError) as exc:
@@ -70,8 +71,9 @@ def save_inventory(path: Path, items: list[Item]) -> None:
         writer.writeheader()
         for item in items:
             writer.writerow({
-                "enabled": "true" if item.enabled else "false", "name": item.name, "essence": item.essence,
-                "power": f"{item.power:g}", "stability": f"{item.stability:g}",
+                "enabled": "true" if item.enabled else "false", "name": item.name, "internal_id": item.internal_id,
+                "quantity": item.quantity, "essence": item.essence, "power": f"{item.power:g}",
+                "stability": f"{item.stability:g}", "price": f"{item.price:g}", "max_stack": item.max_stack, "sprite_path": item.sprite_path,
             })
 
 
@@ -80,15 +82,12 @@ def user_inventory_path() -> Path:
 
 
 def reset_user_inventory_to_default() -> Path:
-    target = user_inventory_path()
-    target.parent.mkdir(parents=True, exist_ok=True)
+    target = user_inventory_path(); target.parent.mkdir(parents=True, exist_ok=True)
     default_resource = resources.files("quasimorph_optimizer.data").joinpath("default_inventory.csv")
-    target.write_bytes(default_resource.read_bytes())
-    return target
+    target.write_bytes(default_resource.read_bytes()); return target
 
 
 def ensure_user_inventory() -> Path:
     target = user_inventory_path()
-    if not target.exists():
-        reset_user_inventory_to_default()
+    if not target.exists(): reset_user_inventory_to_default()
     return target
