@@ -61,3 +61,21 @@ def test_parallel_optimizer_matches_single_process() -> None:
     assert parallel.workers_used == 2
     assert [r.order_text for r in parallel.results] == [r.order_text for r in single.results]
     assert [r.probabilities.sidegrade for r in parallel.results] == [r.probabilities.sidegrade for r in single.results]
+
+
+def test_v05_objective_set_is_intentionally_small() -> None:
+    from quasimorph_optimizer.optimizer import OBJECTIVES
+
+    assert tuple(OBJECTIVES) == ("jackpot", "balanced", "sidegrade", "min_disenchant")
+
+
+def test_parallel_matches_reference_for_every_supported_objective() -> None:
+    from quasimorph_optimizer.optimizer import OBJECTIVES, optimize_parallel
+
+    items = sample_items()
+    for objective in OBJECTIVES:
+        single = optimize(items, center_essence="siaira", tier=3, objective=objective, top_n=10)
+        parallel = optimize_parallel(
+            items, center_essence="siaira", tier=3, objective=objective, top_n=10, workers=2
+        )
+        assert [r.order_text for r in parallel.results] == [r.order_text for r in single.results]

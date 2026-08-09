@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.0
+
+- Added component-name search.
+- Added case-insensitive duplicate-name protection for manual entry, CSV import, and saving.
+- Added click-to-sort inventory headings for availability, name, essence, power, and stability.
+- Added click-to-sort result headings for every displayed metric and clockwise order.
+- Changed default objective to Balanced and reduced objectives to Jackpot, Balanced, Sidegrade, and Minimum Disenchant.
+- Increased default retained results to 10,000.
+- Reworked the brute-force hot path: pairwise affinity contributions are precomputed, candidates use compact numeric scoring, multiprocessing work is partitioned into low-overhead ranges, and full breakdown objects are created only for final retained results.
+- Preserved exact rankings against the reference evaluator across all supported objectives.
+
 ## 0.4.0
 
 - Updated bundled inventory to the repository's current 38-item list/order.

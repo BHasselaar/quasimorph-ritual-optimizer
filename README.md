@@ -2,16 +2,18 @@
 
 A Windows desktop application that exhaustively searches five-component pact rituals in **Quasimorph** using the verified community affinity/probability model.
 
-## v0.4.0
+## v0.5.0
 
-- Bundled inventory updated to the current 38-component list from the repository, preserving its order and availability state.
-- Ship Power/Stability bonuses now default to **0 / 0** and are persisted immediately in the user's settings file whenever a valid value is changed.
-- Inventory rows now have checkbox-style availability controls. Available rows are green; unavailable rows are red.
-- Inventory rows can be rearranged by drag-and-drop; the new order is saved to the user's inventory CSV.
-- Inventory, results, and ritual-detail views now have both horizontal and vertical scrollbars.
-- Brute-force optimization now uses multiple **processes** rather than Python threads, allowing CPU-bound searches to use multiple cores. `Workers = 0` automatically uses all logical CPUs reported by Python.
-- Added **Load bundled** so the v0.4 inventory can be adopted explicitly without automatic migration logic.
-- Multiprocessing uses Windows-compatible `spawn` semantics and deterministic tie-breaking.
+- Search components by name with instant filtering.
+- Case-insensitive duplicate-name protection (`Spider Joint`, `SPIDER JOINT`, etc. are treated as the same name).
+- Click inventory headers to sort by availability, name, essence, Power, or Stability; clicking again reverses the order.
+- Click result headers to sort all retained results by any displayed metric or clockwise order.
+- Default objective is **Balanced**. Available objectives are Jackpot, Balanced, Sidegrade, and Minimum Disenchant.
+- Default retained result count is **10,000**.
+- Exact brute force now precomputes pairwise affinity contributions and scores candidates using compact numeric records. Full ritual breakdown objects are created only for retained results.
+- Parallel work uses low-overhead contiguous combination ranges, reducing process/task overhead while retaining exact exhaustive search.
+- Ship Power/Stability bonuses default to **0 / 0** and persist automatically.
+- Inventory availability colors, checkbox-style toggles, drag-and-drop ordering, and horizontal/vertical scrolling remain available.
 
 ## Run from source
 

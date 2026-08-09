@@ -10,7 +10,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from .constants import ESSENCES, TIER_RULES
-from .inventory import ensure_user_inventory, load_inventory, reset_user_inventory_to_default, save_inventory
+from .inventory import duplicate_name_index, ensure_user_inventory, load_inventory, reset_user_inventory_to_default, save_inventory
 from .models import Item, RitualResult
 from .optimizer import OBJECTIVES, OptimizationSummary, optimize_parallel, unique_ring_order_count
 from .settings import AppSettings, load_settings, save_settings
@@ -74,6 +74,12 @@ class RitualOptimizerApp(tk.Tk):
         self.cancel_event = threading.Event()
         self.worker_queue: queue.Queue[tuple[str, object]] = queue.Queue()
         self._drag_source: str | None = None
+        self._inventory_sort_column: str | None = None
+        self._inventory_sort_reverse = False
+        self._result_sort_column = "rank"
+        self._result_sort_reverse = False
+        self._objective_results: list[RitualResult] = []
+        self._result_original_rank: dict[str, int] = {}
 
         self._build_ui()
         self._refresh_inventory()
@@ -101,6 +107,15 @@ class RitualOptimizerApp(tk.Tk):
         ttk.Button(filebar, text="Export CSV", command=self._export_inventory).pack(side=tk.LEFT, padx=2)
         ttk.Button(filebar, text="Load bundled", command=self._load_bundled_inventory).pack(side=tk.LEFT, padx=2)
 
+        searchbar = ttk.Frame(inventory_frame)
+        searchbar.pack(fill=tk.X, padx=6, pady=(0, 6))
+        ttk.Label(searchbar, text="Search").pack(side=tk.LEFT, padx=(0, 5))
+        self.inventory_search_var = tk.StringVar()
+        search_entry = ttk.Entry(searchbar, textvariable=self.inventory_search_var)
+        search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(searchbar, text="Clear", command=lambda: self.inventory_search_var.set("")).pack(side=tk.LEFT, padx=(5, 0))
+        self.inventory_search_var.trace_add("write", lambda *_args: self._refresh_inventory())
+
         inventory_container = ttk.Frame(inventory_frame)
         inventory_container.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
         inventory_container.rowconfigure(0, weight=1)
@@ -113,8 +128,9 @@ class RitualOptimizerApp(tk.Tk):
             "power": "Power", "stability": "Stability"
         }
         widths = {"enabled": 75, "name": 215, "essence": 85, "power": 70, "stability": 75}
+        self._inventory_headings = headings
         for column in columns:
-            self.inventory_tree.heading(column, text=headings[column])
+            self.inventory_tree.heading(column, text=headings[column], command=lambda c=column: self._sort_inventory(c))
             self.inventory_tree.column(
                 column,
                 width=widths[column],
@@ -144,8 +160,8 @@ class RitualOptimizerApp(tk.Tk):
 
         self.tier_var = tk.IntVar(value=3)
         self.center_var = tk.StringVar(value="siaira")
-        self.objective_var = tk.StringVar(value="sidegrade")
-        self.top_n_var = tk.IntVar(value=50)
+        self.objective_var = tk.StringVar(value="balanced")
+        self.top_n_var = tk.IntVar(value=10_000)
         self.flat_power_var = tk.StringVar(value=f"{self.settings.ship_power_bonus:g}")
         self.flat_stability_var = tk.StringVar(value=f"{self.settings.ship_stability_bonus:g}")
         self.worker_count_var = tk.IntVar(value=self.settings.worker_count)
@@ -164,10 +180,10 @@ class RitualOptimizerApp(tk.Tk):
         ttk.Combobox(controls, textvariable=self.center_var, values=ESSENCES, width=12, state="readonly").grid(
             row=1, column=1, padx=5, pady=(0, 6), sticky="ew"
         )
-        ttk.Combobox(controls, textvariable=self.objective_var, values=tuple(OBJECTIVES), width=18, state="readonly").grid(
+        ttk.Combobox(controls, textvariable=self.objective_var, values=("jackpot", "balanced", "sidegrade", "min disenchant"), width=18, state="readonly").grid(
             row=1, column=2, padx=5, pady=(0, 6), sticky="ew"
         )
-        ttk.Spinbox(controls, from_=1, to=500, textvariable=self.top_n_var, width=8).grid(
+        ttk.Spinbox(controls, from_=1, to=100000, textvariable=self.top_n_var, width=9).grid(
             row=1, column=3, padx=5, pady=(0, 6), sticky="ew"
         )
         ttk.Entry(controls, textvariable=self.flat_power_var, width=12).grid(
@@ -218,8 +234,9 @@ class RitualOptimizerApp(tk.Tk):
             "jackpot": 70, "upgrade": 70, "sidegrade": 75, "downgrade": 78,
             "disenchant": 80, "order": 520,
         }
+        self._result_headings = result_headings
         for column in result_columns:
-            self.result_tree.heading(column, text=result_headings[column])
+            self.result_tree.heading(column, text=result_headings[column], command=lambda c=column: self._sort_results(c))
             self.result_tree.column(
                 column,
                 width=result_widths[column],
@@ -285,19 +302,46 @@ class RitualOptimizerApp(tk.Tk):
 
     def _refresh_inventory(self, selected_index: int | None = None) -> None:
         self.inventory_tree.delete(*self.inventory_tree.get_children())
+        query = self.inventory_search_var.get().strip().casefold() if hasattr(self, "inventory_search_var") else ""
         for index, item in enumerate(self.items):
+            if query and query not in item.name.casefold():
+                continue
             tag = "available" if item.enabled else "unavailable"
             self.inventory_tree.insert(
-                "",
-                tk.END,
-                iid=str(index),
+                "", tk.END, iid=str(index),
                 values=("☑" if item.enabled else "☐", item.name, item.essence, f"{item.power:g}", f"{item.stability:g}"),
                 tags=(tag,),
             )
-        if selected_index is not None and 0 <= selected_index < len(self.items):
+        if selected_index is not None and str(selected_index) in self.inventory_tree.get_children(""):
             self.inventory_tree.selection_set(str(selected_index))
             self.inventory_tree.focus(str(selected_index))
         self._update_inventory_status()
+
+    def _sort_inventory(self, column: str) -> None:
+        if self._inventory_sort_column == column:
+            self._inventory_sort_reverse = not self._inventory_sort_reverse
+        else:
+            self._inventory_sort_column = column
+            self._inventory_sort_reverse = column in {"power", "stability", "enabled"}
+
+        selected = self._selected_inventory_index()
+        selected_item = self.items[selected] if selected is not None and selected < len(self.items) else None
+        keys = {
+            "enabled": lambda item: item.enabled,
+            "name": lambda item: item.name.casefold(),
+            "essence": lambda item: item.essence.casefold(),
+            "power": lambda item: item.power,
+            "stability": lambda item: item.stability,
+        }
+        self.items.sort(key=keys[column], reverse=self._inventory_sort_reverse)
+        self._save_inventory(silent=True)
+        selected_index = self.items.index(selected_item) if selected_item in self.items else None
+        self._refresh_inventory(selected_index)
+        for col, title in self._inventory_headings.items():
+            arrow = ""
+            if col == column:
+                arrow = " ▼" if self._inventory_sort_reverse else " ▲"
+            self.inventory_tree.heading(col, text=title + arrow, command=lambda c=col: self._sort_inventory(c))
 
     def _update_inventory_status(self) -> None:
         enabled = sum(item.enabled for item in self.items)
@@ -319,7 +363,7 @@ class RitualOptimizerApp(tk.Tk):
         return None
 
     def _inventory_drag(self, event: tk.Event) -> None:
-        if self._drag_source is None:
+        if self._drag_source is None or self.inventory_search_var.get().strip():
             return
         target = self.inventory_tree.identify_row(event.y)
         if not target or target == self._drag_source:
@@ -330,12 +374,18 @@ class RitualOptimizerApp(tk.Tk):
     def _inventory_release(self, _event: tk.Event) -> None:
         if self._drag_source is None:
             return
+        if self.inventory_search_var.get().strip():
+            self._drag_source = None
+            return
         ordered_ids = self.inventory_tree.get_children("")
         if ordered_ids:
             old_items = list(self.items)
             self.items = [old_items[int(iid)] for iid in ordered_ids]
             moved_item = old_items[int(self._drag_source)]
             selected_index = self.items.index(moved_item)
+            self._inventory_sort_column = None
+            for col, title in self._inventory_headings.items():
+                self.inventory_tree.heading(col, text=title, command=lambda c=col: self._sort_inventory(c))
             self._save_inventory(silent=True)
             self._refresh_inventory(selected_index)
         self._drag_source = None
@@ -348,20 +398,36 @@ class RitualOptimizerApp(tk.Tk):
 
     def _add_item(self) -> None:
         dialog = ItemDialog(self, "Add inventory item")
-        if dialog.result_item:
-            self.items.append(dialog.result_item)
-            self._refresh_inventory(len(self.items) - 1)
-            self._save_inventory(silent=True)
+        if not dialog.result_item:
+            return
+        duplicate = duplicate_name_index(self.items, dialog.result_item.name)
+        if duplicate is not None:
+            messagebox.showerror(
+                "Duplicate component",
+                f"A component named {self.items[duplicate].name!r} already exists. Names are case-insensitive.",
+            )
+            return
+        self.items.append(dialog.result_item)
+        self._refresh_inventory(len(self.items) - 1)
+        self._save_inventory(silent=True)
 
     def _edit_item(self) -> None:
         index = self._selected_inventory_index()
         if index is None:
             return
         dialog = ItemDialog(self, "Edit inventory item", self.items[index])
-        if dialog.result_item:
-            self.items[index] = dialog.result_item
-            self._refresh_inventory(index)
-            self._save_inventory(silent=True)
+        if not dialog.result_item:
+            return
+        duplicate = duplicate_name_index(self.items, dialog.result_item.name, exclude_index=index)
+        if duplicate is not None:
+            messagebox.showerror(
+                "Duplicate component",
+                f"A component named {self.items[duplicate].name!r} already exists. Names are case-insensitive.",
+            )
+            return
+        self.items[index] = dialog.result_item
+        self._refresh_inventory(index)
+        self._save_inventory(silent=True)
 
     def _delete_item(self) -> None:
         index = self._selected_inventory_index()
@@ -387,7 +453,7 @@ class RitualOptimizerApp(tk.Tk):
             save_inventory(self.inventory_path, self.items)
             if not silent:
                 messagebox.showinfo("Inventory saved", f"Saved to:\n{self.inventory_path}")
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             messagebox.showerror("Save failed", str(exc))
 
     def _import_inventory(self) -> None:
@@ -406,7 +472,7 @@ class RitualOptimizerApp(tk.Tk):
     def _load_bundled_inventory(self) -> None:
         if not messagebox.askyesno(
             "Load bundled inventory",
-            "Replace your current local inventory with the inventory bundled in v0.4.0?",
+            "Replace your current local inventory with the inventory bundled in v0.5.0?",
         ):
             return
         try:
@@ -459,7 +525,7 @@ class RitualOptimizerApp(tk.Tk):
             "items": list(self.items),
             "center_essence": self.center_var.get(),
             "tier": tier,
-            "objective": self.objective_var.get(),
+            "objective": self.objective_var.get().replace(" ", "_"),
             "top_n": top_n,
             "flat_power_bonus": flat_power,
             "flat_stability_bonus": flat_stability,
@@ -506,31 +572,69 @@ class RitualOptimizerApp(tk.Tk):
 
     def _finish_optimization(self, summary: OptimizationSummary) -> None:
         self._reset_worker_buttons()
-        self.results = list(summary.results)
-        self.result_tree.delete(*self.result_tree.get_children())
-        for rank, result in enumerate(self.results, start=1):
-            p = result.probabilities
-            self.result_tree.insert(
-                "", tk.END, iid=str(rank - 1),
-                values=(
-                    rank, f"{result.total_power:.2f}", f"{result.total_stability:.2f}",
-                    f"{result.power_percent:.2%}", f"{result.stability_percent:.2%}",
-                    f"{p.jackpot:.2%}", f"{p.upgrade:.2%}", f"{p.sidegrade:.2%}",
-                    f"{p.downgrade:.2%}", f"{p.disenchant:.2%}", result.order_text,
-                ),
-            )
-        self.progress.configure(
-            value=(summary.evaluated / summary.total_candidates * 100.0) if summary.total_candidates else 0
-        )
+        self._objective_results = list(summary.results)
+        self._result_original_rank = {result.order_text: rank for rank, result in enumerate(self._objective_results, start=1)}
+        self.results = list(self._objective_results)
+        self._result_sort_column = "rank"
+        self._result_sort_reverse = False
+        self._render_results()
+        self.progress.configure(value=(summary.evaluated / summary.total_candidates * 100.0) if summary.total_candidates else 0)
         state = "Cancelled" if summary.cancelled else "Finished"
         self.status_var.set(
-            f"{state}: {summary.evaluated:,} evaluated with {summary.workers_used} workers; "
-            f"{len(summary.results)} retained"
+            f"{state}: {summary.evaluated:,} evaluated with {summary.workers_used} workers; {len(summary.results):,} retained"
         )
         if self.results:
             self.result_tree.selection_set("0")
             self.result_tree.focus("0")
             self._show_result_details()
+
+    def _render_results(self) -> None:
+        self.result_tree.delete(*self.result_tree.get_children())
+        for row, result in enumerate(self.results):
+            p = result.probabilities
+            original_rank = self._result_original_rank.get(result.order_text, row + 1)
+            self.result_tree.insert(
+                "", tk.END, iid=str(row),
+                values=(
+                    original_rank, f"{result.total_power:.2f}", f"{result.total_stability:.2f}",
+                    f"{result.power_percent:.2%}", f"{result.stability_percent:.2%}",
+                    f"{p.jackpot:.2%}", f"{p.upgrade:.2%}", f"{p.sidegrade:.2%}",
+                    f"{p.downgrade:.2%}", f"{p.disenchant:.2%}", result.order_text,
+                ),
+            )
+
+    def _sort_results(self, column: str) -> None:
+        if not self.results:
+            return
+        if self._result_sort_column == column:
+            self._result_sort_reverse = not self._result_sort_reverse
+        else:
+            self._result_sort_column = column
+            self._result_sort_reverse = column not in {"rank", "order"}
+
+        def value(result: RitualResult):
+            p = result.probabilities
+            return {
+                "rank": self._result_original_rank.get(result.order_text, 10**9),
+                "power": result.total_power,
+                "stability": result.total_stability,
+                "power_pct": result.power_percent,
+                "stability_pct": result.stability_percent,
+                "jackpot": p.jackpot,
+                "upgrade": p.upgrade,
+                "sidegrade": p.sidegrade,
+                "downgrade": p.downgrade,
+                "disenchant": p.disenchant,
+                "order": result.order_text.casefold(),
+            }[column]
+
+        self.results.sort(key=value, reverse=self._result_sort_reverse)
+        self._render_results()
+        for col, title in self._result_headings.items():
+            arrow = ""
+            if col == column:
+                arrow = " ▼" if self._result_sort_reverse else " ▲"
+            self.result_tree.heading(col, text=title + arrow, command=lambda c=col: self._sort_results(c))
 
     def _show_result_details(self, _event: object | None = None) -> None:
         selection = self.result_tree.selection()

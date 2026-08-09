@@ -31,3 +31,26 @@ def test_v04_bundled_inventory_shape() -> None:
     assert items[31].name == "Shard"
     assert items[31].enabled is False
     assert items[-1].name == "Eye of Wrath"
+
+
+def test_duplicate_names_are_rejected_case_insensitively(tmp_path: Path) -> None:
+    import pytest
+
+    path = tmp_path / "inventory.csv"
+    path.write_text(
+        "enabled,name,essence,power,stability\n"
+        "true,Spider Joint,agga,80,25\n"
+        "true,sPiDeR jOiNt,eon,10,10\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="duplicate component name"):
+        load_inventory(path)
+
+
+def test_duplicate_names_are_rejected_when_saving(tmp_path: Path) -> None:
+    import pytest
+
+    path = tmp_path / "inventory.csv"
+    items = [Item("Gold Bars", "eon", 110, 25), Item("GOLD BARS", "agga", 80, 20)]
+    with pytest.raises(ValueError, match="Duplicate component name"):
+        save_inventory(path, items)
