@@ -1,3 +1,0 @@
-UnityPy
-TypeTreeGeneratorAPI>=0.0.10
-numpy>=1.26

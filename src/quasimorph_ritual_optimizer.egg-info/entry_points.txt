@@ -1,2 +1,0 @@
-[gui_scripts]
-quasimorph-ritual-optimizer = quasimorph_optimizer.app:main
