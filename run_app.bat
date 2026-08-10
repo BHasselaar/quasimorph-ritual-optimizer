@@ -1,9 +1,9 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title Quasimorph Ritual Optimizer v0.8.2
+title Quasimorph Ritual Optimizer v1.0.0
 
-echo Quasimorph Ritual Optimizer v0.8.2
+echo Quasimorph Ritual Optimizer v1.0.0
 echo ===================================
 echo.
 set "PYTHONPATH=%CD%\src"
