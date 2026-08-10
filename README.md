@@ -1,4 +1,4 @@
-# Quasimorph Ritual Optimizer v0.8.0
+# Quasimorph Ritual Optimizer v0.7.0
 
 v0.8 keeps component matching tied to confirmed in-game sprite names, uses NumPy batch evaluation, and reads the player's save automatically. Repeated components remain available as an advanced option.
 
